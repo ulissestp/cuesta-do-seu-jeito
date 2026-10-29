@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 
 from src.excel_io import Attraction, TouristProfile, canonical_city_name
+from src.geo_distance import GeoContext, LatLng, haversine_km
 from src.group_scores import GroupScores, build_technical_analysis
+from src.maps_links import maps_markdown_line, try_shorten_maps_url
 
 DAY_END_HOUR = 18
 DEFAULT_OPEN = time(8, 0)
@@ -21,6 +23,7 @@ class ScheduleBlock:
     title: str
     detail: str
     kind: str  # visit | transit | lunch | end | lodging
+    maps_url: str = ""
 
 
 @dataclass
@@ -93,7 +96,6 @@ def filter_attractions(
     filtered.sort(
         key=lambda x: (abs(x.peso_plog - plog) + abs(x.peso_cohen - cohen), -x.tempo_horas)
     )
-    random.shuffle(filtered)
     return filtered
 
 
@@ -129,27 +131,38 @@ def _schedule_visits_phase(
     max_visits: int,
     visits_so_far: int,
     stop_before: datetime | None,
-) -> tuple[datetime, int]:
-    """Agenda visitas até o limite do ritmo ou até o horário limite, respeitando tempo médio da planilha."""
+    geo: GeoContext,
+    scores: GroupScores,
+    day_start: LatLng | None,
+    start_from: Attraction | None = None,
+) -> tuple[datetime, int, Attraction | None]:
+    """Agenda visitas até o limite do ritmo ou horário, otimizando ordem por distância no dia."""
     day_limit = _combine(day_anchor, time(DAY_END_HOUR, 0))
     cursor_local = cursor
     count = visits_so_far
+    last_attr: Attraction | None = start_from
     while count < max_visits:
         limit = stop_before or day_limit
         if cursor_local >= min(limit, day_limit):
             break
-        if count > visits_so_far:
-            cursor_local = _append_transit(blocks, cursor_local)
-            if cursor_local >= min(limit, day_limit):
-                break
         prev = cursor_local
-        cursor_local = _schedule_from_pool(
-            cursor_local, pool, day_anchor, used_ids, blocks, scheduled
+        cursor_local, last_attr = _schedule_from_pool(
+            cursor_local,
+            pool,
+            day_anchor,
+            used_ids,
+            blocks,
+            scheduled,
+            geo=geo,
+            scores=scores,
+            last_attr=last_attr,
+            day_start=day_start,
+            time_limit=min(limit, day_limit),
         )
         if cursor_local == prev:
             break
         count += 1
-    return cursor_local, count
+    return cursor_local, count, last_attr
 
 
 def _open_for_lunch(attraction: Attraction, day_anchor: datetime) -> bool:
@@ -160,17 +173,39 @@ def _open_for_lunch(attraction: Attraction, day_anchor: datetime) -> bool:
     return open_dt <= lunch_start and close_dt >= lunch_end
 
 
+def _score_distance(a: Attraction, plog: float, cohen: float) -> float:
+    return abs(a.peso_plog - plog) + abs(a.peso_cohen - cohen)
+
+
+def _geo_sort_key(
+    attraction: Attraction,
+    reference: LatLng | None,
+    geo: GeoContext,
+    plog: float,
+    cohen: float,
+) -> tuple[float, float]:
+    """Menor = melhor: distância geográfica primeiro, depois score Plog/Cohen."""
+    point = geo.coords(attraction)
+    if reference and point:
+        geo_km = haversine_km(reference, point)
+    elif point and not reference:
+        geo_km = 0.0
+    else:
+        geo_km = 9999.0
+    return (geo_km, _score_distance(attraction, plog, cohen))
+
+
 def _pick_lunch_gastronomy(
     profile: TouristProfile,
     inventory: list[Attraction],
     scores: GroupScores,
     used_ids: set[str],
     day_anchor: datetime,
+    *,
+    geo: GeoContext | None = None,
+    near: LatLng | None = None,
 ) -> Attraction | None:
     plog, cohen = scores.media_plog, scores.media_cohen
-
-    def distance(a: Attraction) -> float:
-        return abs(a.peso_plog - plog) + abs(a.peso_cohen - cohen)
 
     strict: list[Attraction] = []
     loose: list[Attraction] = []
@@ -190,12 +225,18 @@ def _pick_lunch_gastronomy(
     pool = strict or loose
     if not pool:
         return None
-    pool.sort(key=distance)
-    best = distance(pool[0])
-    tier = [a for a in pool if distance(a) <= best + 0.51]
+
+    def sort_key(a: Attraction) -> tuple[float, float]:
+        if geo and near:
+            return _geo_sort_key(a, near, geo, plog, cohen)
+        return (_score_distance(a, plog, cohen), 0.0)
+
+    pool.sort(key=sort_key)
+    best = sort_key(pool[0])
+    tier = [a for a in pool if sort_key(a) <= (best[0] + 0.51, best[1] + 0.51)]
     if len(tier) == 1 and len(pool) > 1:
         tier = pool[: min(5, len(pool))]
-    return random.choice(tier)
+    return tier[0]
 
 
 def _pick_lodging_suggestions(
@@ -258,6 +299,11 @@ def _combine(day_anchor: datetime, hour_minute: time) -> datetime:
     return datetime.combine(day_anchor.date(), hour_minute)
 
 
+def _maps_plain_suffix(maps_url: str) -> str:
+    url = try_shorten_maps_url(maps_url)
+    return f" Localização: {url}" if url else ""
+
+
 def _visit_detail(attraction: Attraction, start: datetime, end: datetime) -> str:
     elapsed_h = (end - start).total_seconds() / 3600
     city = _city_label(attraction)
@@ -280,7 +326,8 @@ def _lodging_options_summary(attractions: list[Attraction]) -> str:
         return "—"
     lines = ["Sugestões para pernoite — não entram na programação de visitas do dia."]
     for i, attraction in enumerate(attractions, 1):
-        lines.append(f"Opção {i}: {_visit_title(attraction)}. {attraction.descricao}")
+        maps_part = _maps_plain_suffix(attraction.maps_url)
+        lines.append(f"Opção {i}: {_visit_title(attraction)}. {attraction.descricao}{maps_part}")
     return "\n".join(lines)
 
 
@@ -309,14 +356,36 @@ def _schedule_visit(
     return start, end
 
 
-def _append_transit(blocks: list[ScheduleBlock], cursor: datetime) -> datetime:
-    transit_end = cursor + timedelta(minutes=30)
+def _transit_detail(
+    origin: Attraction,
+    destination: Attraction,
+    minutes: int,
+    geo: GeoContext,
+) -> str:
+    km = geo.distance_km(origin, destination)
+    if km is not None:
+        return (
+            f"Deslocamento de {_visit_title(origin)} até {_visit_title(destination)} "
+            f"(~{km:.1f} km, {minutes} minutos)."
+        )
+    return f"Trânsito entre as localidades ({minutes} minutos)."
+
+
+def _append_transit(
+    blocks: list[ScheduleBlock],
+    cursor: datetime,
+    minutes: int,
+    origin: Attraction,
+    destination: Attraction,
+    geo: GeoContext,
+) -> datetime:
+    transit_end = cursor + timedelta(minutes=minutes)
     blocks.append(
         ScheduleBlock(
             start=cursor,
             end=transit_end,
             title="Deslocamento",
-            detail="Trânsito entre as localidades (30 minutos).",
+            detail=_transit_detail(origin, destination, minutes, geo),
             kind="transit",
         )
     )
@@ -330,18 +399,41 @@ def _schedule_from_pool(
     used_ids: set[str],
     blocks: list[ScheduleBlock],
     scheduled: list[Attraction],
-) -> datetime:
-    options: list[tuple[Attraction, datetime, datetime]] = []
+    *,
+    geo: GeoContext,
+    scores: GroupScores,
+    last_attr: Attraction | None,
+    day_start: LatLng | None,
+    time_limit: datetime,
+) -> tuple[datetime, Attraction | None]:
+    plog, cohen = scores.media_plog, scores.media_cohen
+    reference = geo.coords(last_attr) if last_attr else day_start
+    candidates: list[tuple[Attraction, datetime, datetime, int]] = []
+
     for attraction in pool:
         if attraction.id in used_ids:
             continue
-        slot = _schedule_visit(cursor, attraction, day_anchor)
-        if slot:
-            start, end = slot
-            options.append((attraction, start, end))
-    if not options:
-        return cursor
-    attraction, start, end = random.choice(options)
+        transit_min = geo.travel_minutes(last_attr, attraction) if last_attr else 0
+        cursor_after_transit = cursor + timedelta(minutes=transit_min)
+        if cursor_after_transit >= time_limit:
+            continue
+        slot = _schedule_visit(cursor_after_transit, attraction, day_anchor)
+        if not slot:
+            continue
+        start, end = slot
+        if end > time_limit:
+            continue
+        candidates.append((attraction, start, end, transit_min))
+
+    if not candidates:
+        return cursor, None
+
+    candidates.sort(key=lambda item: _geo_sort_key(item[0], reference, geo, plog, cohen))
+    attraction, start, end, transit_min = candidates[0]
+
+    if last_attr and transit_min > 0:
+        cursor = _append_transit(blocks, cursor, transit_min, last_attr, attraction, geo)
+
     blocks.append(
         ScheduleBlock(
             start=start,
@@ -349,11 +441,12 @@ def _schedule_from_pool(
             title=_visit_title(attraction),
             detail=_visit_detail(attraction, start, end),
             kind="visit",
+            maps_url=attraction.maps_url,
         )
     )
     used_ids.add(attraction.id)
     scheduled.append(attraction)
-    return end
+    return end, attraction
 
 
 def build_itinerary(
@@ -366,22 +459,25 @@ def build_itinerary(
     visit_candidates = _visit_pool(selected)
     days_count = max(1, profile.duracao_dias)
     max_visits = _max_visits_for_ritmo(profile.ritmo)
+    geo = GeoContext(inventory)
 
     days: list[DayPlan] = []
     used_global: set[str] = set()
     pool = list(visit_candidates)
-    random.shuffle(pool)
     trip_lodging = _pick_lodging_suggestions(profile, inventory, scores)
 
     for day in range(1, days_count + 1):
-        random.shuffle(pool)
         day_anchor = _day_anchor(day)
+        day_start = geo.day_start_reference(
+            [a for a in pool if a.id not in used_global],
+            profile.cidades,
+        )
         blocks: list[ScheduleBlock] = []
         scheduled_today: list[Attraction] = []
         cursor = day_anchor
         lunch_cutoff = _combine(day_anchor, time(12, 0))
 
-        cursor, visit_count = _schedule_visits_phase(
+        cursor, visit_count, morning_last = _schedule_visits_phase(
             cursor,
             pool=pool,
             day_anchor=day_anchor,
@@ -391,11 +487,23 @@ def build_itinerary(
             max_visits=max_visits,
             visits_so_far=0,
             stop_before=lunch_cutoff,
+            geo=geo,
+            scores=scores,
+            day_start=day_start,
         )
 
         lunch_start = max(cursor, lunch_cutoff)
         lunch_end = lunch_start + timedelta(hours=1, minutes=30)
-        lunch_attr = _pick_lunch_gastronomy(profile, inventory, scores, used_global, day_anchor)
+        lunch_near = geo.coords(morning_last) if morning_last else day_start
+        lunch_attr = _pick_lunch_gastronomy(
+            profile,
+            inventory,
+            scores,
+            used_global,
+            day_anchor,
+            geo=geo,
+            near=lunch_near,
+        )
         if lunch_attr:
             used_global.add(lunch_attr.id)
             scheduled_today.append(lunch_attr)
@@ -414,11 +522,13 @@ def build_itinerary(
                 title=lunch_title,
                 detail=lunch_detail,
                 kind="lunch",
+                maps_url=lunch_attr.maps_url if lunch_attr else "",
             )
         )
         cursor = lunch_end
+        afternoon_start = geo.coords(lunch_attr) if lunch_attr else lunch_near
 
-        cursor, visit_count = _schedule_visits_phase(
+        cursor, visit_count, _ = _schedule_visits_phase(
             cursor,
             pool=pool,
             day_anchor=day_anchor,
@@ -428,6 +538,10 @@ def build_itinerary(
             max_visits=max_visits,
             visits_so_far=visit_count,
             stop_before=None,
+            geo=geo,
+            scores=scores,
+            day_start=afternoon_start or day_start,
+            start_from=lunch_attr,
         )
 
         theme = _theme_for_day(scheduled_today)
@@ -484,6 +598,15 @@ def build_itinerary(
     )
 
 
+def _block_detail_markdown(block: ScheduleBlock) -> str:
+    detail = block.detail
+    if block.maps_url:
+        line = maps_markdown_line(block.maps_url)
+        if line:
+            detail = f"{detail} {line}"
+    return detail
+
+
 def itinerary_to_markdown(result: ItineraryResult) -> str:
     p = result.profile
     s = result.scores
@@ -505,7 +628,8 @@ def itinerary_to_markdown(result: ItineraryResult) -> str:
                 lines.append(f"**{_fmt_time(block.start)} — {block.title}** — {block.detail}")
             else:
                 lines.append(
-                    f"**{_fmt_time(block.start)} – {_fmt_time(block.end)}** — {block.title}: {block.detail}"
+                    f"**{_fmt_time(block.start)} – {_fmt_time(block.end)}** — "
+                    f"{block.title}: {_block_detail_markdown(block)}"
                 )
         lines.append("")
     lines.append("## Análise e validação técnica")

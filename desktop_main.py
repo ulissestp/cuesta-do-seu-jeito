@@ -29,6 +29,7 @@ from src.excel_io import (
     initialize_session_workbook,
     clear_profile_only,
     import_inventory_sheet,
+    inventory_maps_coverage,
     read_inventory,
     read_profile,
     save_profile,
@@ -47,6 +48,7 @@ from src.form_constants import (
 from src.session_store import load_last_workbook, remember_workbook
 from src.itinerary_engine import itinerary_to_markdown
 from src.pdf_export import build_pdf, roteiro_pdf_filename
+from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 from src.roteiro_service import gerar_roteiro_da_planilha
 
 ctk.set_appearance_mode("System")
@@ -102,6 +104,7 @@ class RoteiroDesktopApp(ctk.CTk):
             )
         remember_workbook(self.workbook_path)
         self.last_pdf: Path | None = None
+        self.last_anamnese_pdf: Path | None = None
         self.itinerary_result = None
 
         self.plog_combos: dict[str, ctk.CTkComboBox] = {}
@@ -143,10 +146,12 @@ class RoteiroDesktopApp(ctk.CTk):
         self.tabs.add("1. Perfil")
         self.tabs.add("2. Inventário")
         self.tabs.add("3. Roteiro PDF")
+        self.tabs.add("4. Ficha anamnese")
 
         self._build_profile_tab(self.tabs.tab("1. Perfil"))
         self._build_inventory_tab(self.tabs.tab("2. Inventário"))
         self._build_pdf_tab(self.tabs.tab("3. Roteiro PDF"))
+        self._build_anamnese_tab(self.tabs.tab("4. Ficha anamnese"))
 
     def _build_profile_tab(self, parent: ctk.CTkFrame) -> None:
         scroll = ctk.CTkScrollableFrame(parent)
@@ -336,6 +341,39 @@ class RoteiroDesktopApp(ctk.CTk):
         self.preview = ctk.CTkTextbox(parent, font=ctk.CTkFont(family="Consolas", size=11))
         self.preview.pack(fill="both", expand=True, pady=8)
 
+    def _build_anamnese_tab(self, parent: ctk.CTkFrame) -> None:
+        ctk.CTkLabel(
+            parent,
+            text="Ficha de anamnese médica e termo de compromisso e risco",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", pady=(8, 4))
+        ctk.CTkLabel(
+            parent,
+            text=(
+                "Gera PDF em branco para impressão (A4), uma ficha por participante "
+                "conforme o número de pessoas do perfil do grupo."
+            ),
+            wraplength=900,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 12))
+
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", pady=4)
+        ctk.CTkButton(
+            row,
+            text="Gerar PDF das fichas",
+            height=40,
+            font=ctk.CTkFont(weight="bold"),
+            command=self._generate_anamnese_pdf,
+        ).pack(side="left")
+        ctk.CTkButton(row, text="Abrir PDF", command=self._open_anamnese_pdf).pack(side="left", padx=8)
+        ctk.CTkButton(row, text="Abrir pasta de saída", command=self._open_output_folder).pack(
+            side="left", padx=8
+        )
+
+        self.anamnese_status = ctk.CTkLabel(parent, text="", anchor="w")
+        self.anamnese_status.pack(fill="x", pady=8)
+
     def _refresh_scores_panel(self) -> None:
         for w in self.score_frame.winfo_children():
             w.destroy()
@@ -455,7 +493,13 @@ class RoteiroDesktopApp(ctk.CTk):
             count = import_inventory_sheet(self.workbook_path, Path(path))
             remember_workbook(self.workbook_path)
             self._refresh_inventory_table()
-            messagebox.showinfo("Importado", f"{count} atrações importadas.")
+            with_maps, total = inventory_maps_coverage(self.workbook_path)
+            maps_line = (
+                f"\nLinks Google Maps: {with_maps}/{total}."
+                if total
+                else ""
+            )
+            messagebox.showinfo("Importado", f"{count} atrações importadas.{maps_line}")
         except Exception as exc:
             messagebox.showerror("Erro", str(exc))
 
@@ -489,6 +533,17 @@ class RoteiroDesktopApp(ctk.CTk):
                 return
             save_profile(self.workbook_path, profile)
             remember_workbook(self.workbook_path)
+            with_maps, total = inventory_maps_coverage(self.workbook_path)
+            if total and with_maps == 0:
+                proceed = messagebox.askyesno(
+                    "Links do Google Maps ausentes",
+                    "O inventário desta sessão não tem links na coluna Maps.\n\n"
+                    "Na etapa 2, importe de novo o arquivo "
+                    "Modelo_Inventario_Turistico.xlsx (Desktop → PROJETO INTEGRADOR).\n\n"
+                    "Gerar o PDF mesmo assim, sem links no roteiro?",
+                )
+                if not proceed:
+                    return
             result = gerar_roteiro_da_planilha(self.workbook_path)
             self.itinerary_result = result
             profile = result.profile
@@ -509,6 +564,46 @@ class RoteiroDesktopApp(ctk.CTk):
             messagebox.showwarning("PDF", "Gere o PDF primeiro na aba 3.")
             return
         os.startfile(self.last_pdf)
+
+    def _generate_anamnese_pdf(self) -> None:
+        try:
+            profile = read_profile(self.workbook_path)
+            copies = max(1, profile.numero_pessoas) if profile.numero_pessoas else 1
+            if profile.numero_pessoas < 1:
+                if not messagebox.askyesno(
+                    "Participantes",
+                    "O número de pessoas no perfil está vazio. Gerar 1 ficha em branco mesmo assim?",
+                ):
+                    return
+            localidade = "Botucatu/SP"
+            if profile.cidades:
+                localidade = f"{profile.cidades[0]}/SP"
+            pdf_path = OUT / anamnese_pdf_filename(
+                profile.nome_grupo or "grupo",
+                copies=copies,
+            )
+            build_anamnese_pdf(
+                pdf_path,
+                copies=copies,
+                nome_grupo=profile.nome_grupo,
+                localidade=localidade,
+            )
+            self.last_anamnese_pdf = pdf_path
+            self.anamnese_status.configure(
+                text=f"PDF gerado: {pdf_path} ({copies} ficha(s) para impressão)"
+            )
+            messagebox.showinfo(
+                "Ficha de anamnese",
+                f"PDF salvo em:\n{pdf_path}\n\n{copies} ficha(s) em branco (uma por participante).",
+            )
+        except Exception as exc:
+            messagebox.showerror("Erro", str(exc))
+
+    def _open_anamnese_pdf(self) -> None:
+        if not self.last_anamnese_pdf or not self.last_anamnese_pdf.exists():
+            messagebox.showwarning("PDF", "Gere o PDF primeiro na aba 4.")
+            return
+        os.startfile(self.last_anamnese_pdf)
 
     def _open_output_folder(self) -> None:
         os.startfile(OUT)

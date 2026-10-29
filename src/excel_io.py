@@ -10,6 +10,7 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from src.app_paths import data_dir
+from src.maps_links import clean_maps_url
 
 PROFILE_SHEET = "Perfil do Turista (Grupos)"
 INVENTORY_SHEET = "Inventário Turístico"
@@ -39,6 +40,7 @@ FULL_INVENTORY_HEADERS = (
     "Peso Cohen (Independência)",
     "Descrição Breve",
     "Cidade",
+    "Maps",
 )
 
 CIDADES_ROTEIRO = ("Botucatu", "Pardinho", "Bofete")
@@ -178,6 +180,7 @@ class Attraction:
     peso_cohen: float
     descricao: str
     cidade: str = ""
+    maps_url: str = ""
 
     @property
     def horario_funcionamento(self) -> str:
@@ -435,6 +438,18 @@ def _full_inventory_has_city_column(header: tuple[Any, ...]) -> bool:
     return any("cidade" in label for label in labels)
 
 
+def _full_inventory_has_maps_column(header: tuple[Any, ...]) -> bool:
+    labels = [_normalize_header_cell(c) for c in header if c]
+    return any("maps" in label for label in labels)
+
+
+def _column_index_by_header(header: tuple[Any, ...], needle: str) -> int | None:
+    for idx, cell in enumerate(header):
+        if needle in _normalize_header_cell(cell):
+            return idx
+    return None
+
+
 def _normalize_full_import_row(row: tuple[Any, ...], header: tuple[Any, ...] | None = None) -> tuple[Any, ...]:
     """Converte linhas antigas (vegetariana) ou incompletas para o modelo atual."""
     cells = tuple(row)
@@ -453,13 +468,23 @@ def _full_inventory_has_veg_column(header: tuple[Any, ...]) -> bool:
     return any("veget" in label for label in labels)
 
 
-def _parse_compact_row(row: tuple[Any, ...]) -> Attraction | None:
+def _parse_compact_row(
+    row: tuple[Any, ...], header: tuple[Any, ...] | None = None
+) -> Attraction | None:
     if not row or not row[0] or str(row[0]).upper() == "ID":
         return None
     try:
         nome = str(row[1] or "").strip()
         categoria = _infer_categoria(nome)
         descricao = nome
+        plog_idx, cohen_idx = 5, 6
+        maps_url = ""
+        if header and _full_inventory_has_maps_column(header):
+            maps_idx = _column_index_by_header(header, "maps")
+            if maps_idx is not None and maps_idx == 5:
+                plog_idx, cohen_idx = 6, 7
+            if maps_idx is not None and len(row) > maps_idx:
+                maps_url = clean_maps_url(row[maps_idx])
         return Attraction(
             id=str(row[0]).strip(),
             nome=nome,
@@ -468,10 +493,11 @@ def _parse_compact_row(row: tuple[Any, ...]) -> Attraction | None:
             horario_fechamento=parse_time_value(row[3]),
             capacidade=int(float(row[4] or 0)),
             tempo_horas=_infer_tempo_horas(categoria),
-            peso_plog=float(row[5] or 0),
-            peso_cohen=float(row[6] or 0),
+            peso_plog=float(row[plog_idx] or 0),
+            peso_cohen=float(row[cohen_idx] or 0),
             descricao=descricao,
             cidade="",
+            maps_url=maps_url,
         )
     except (TypeError, ValueError, IndexError):
         return None
@@ -492,6 +518,7 @@ def _write_full_inventory_sheet(ws: Worksheet, items: list[Attraction]) -> None:
         ws.cell(r, 9, item.peso_cohen)
         ws.cell(r, 10, item.descricao)
         ws.cell(r, 11, item.cidade)
+        ws.cell(r, 12, item.maps_url or None)
 
 
 def _external_inventory_model_path() -> Path:
@@ -567,7 +594,7 @@ def create_inventory_template(path: Path | None = None) -> Path:
         ws.cell(row, 8).fill = score_fill
         ws.cell(row, 9).fill = score_fill
 
-    widths = [10, 34, 22, 14, 14, 16, 14, 14, 16, 48, 18]
+    widths = [10, 34, 22, 14, 14, 16, 14, 14, 16, 48, 18, 42]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
 
@@ -575,7 +602,7 @@ def create_inventory_template(path: Path | None = None) -> Path:
 
     table = Table(
         displayName="InventarioTuristico",
-        ref=f"A1:K{last_row}",
+        ref=f"A1:L{last_row}",
     )
     table.tableStyleInfo = TableStyleInfo(
         name="TableStyleMedium2",
@@ -610,7 +637,8 @@ def create_inventory_template(path: Path | None = None) -> Path:
     help_ws["A3"] = "Preencha todas as colunas conforme o cabeçalho da aba Inventário Turístico."
     help_ws["A4"] = "Horários: HH:MM. Peso Plog e Peso Cohen: escolha na lista (1 a 5)."
     help_ws["A5"] = "Coluna Cidade (K): Botucatu, Pardinho ou Bofete (ex.: Pardinho - SP)."
-    help_ws["A6"] = "Capacidade = número máximo de pessoas do grupo na atração."
+    help_ws["A6"] = "Coluna Maps (L): link do Google Maps (compartilhar → copiar link)."
+    help_ws["A7"] = "Capacidade = número máximo de pessoas do grupo na atração."
 
     wb.save(target)
     return target
@@ -626,10 +654,17 @@ def _parse_inventory_row(
     with_hours: bool,
     has_veg_column: bool = False,
     has_city_column: bool = False,
+    has_maps_column: bool = False,
+    header: tuple[Any, ...] | None = None,
 ) -> Attraction | None:
     if not row or not row[0] or str(row[0]).upper() == "ID":
         return None
     try:
+        maps_url = ""
+        if has_maps_column and header:
+            maps_idx = _column_index_by_header(header, "maps")
+            if maps_idx is not None and len(row) > maps_idx:
+                maps_url = clean_maps_url(row[maps_idx])
         if with_hours:
             if has_veg_column and has_city_column:
                 desc_idx, city_idx = 10, 11
@@ -656,6 +691,7 @@ def _parse_inventory_row(
                 peso_cohen=float(row[8] or 0),
                 descricao=str(row[desc_idx] or "").strip() if len(row) > desc_idx else "",
                 cidade=cidade,
+                maps_url=maps_url,
             )
         return Attraction(
             id=str(row[0]).strip(),
@@ -669,9 +705,29 @@ def _parse_inventory_row(
             peso_cohen=float(row[6] or 0),
             descricao=str(row[7] or "").strip(),
             cidade="",
+            maps_url=maps_url,
         )
     except (TypeError, ValueError, IndexError):
         return None
+
+
+def inventory_has_maps_column(workbook_path: Path) -> bool:
+    wb = load_workbook(workbook_path, data_only=True)
+    if INVENTORY_SHEET not in wb.sheetnames:
+        return False
+    header = next(wb[INVENTORY_SHEET].iter_rows(min_row=1, max_row=1, values_only=True), None)
+    if not header:
+        return False
+    return _full_inventory_has_maps_column(header)
+
+
+def inventory_maps_coverage(workbook_path: Path) -> tuple[int, int]:
+    """Retorna (atrações com link Maps, total de atrações)."""
+    items = read_inventory(workbook_path)
+    if not items:
+        return 0, 0
+    with_maps = sum(1 for item in items if item.maps_url)
+    return with_maps, len(items)
 
 
 def read_inventory(workbook_path: Path) -> list[Attraction]:
@@ -684,17 +740,25 @@ def read_inventory(workbook_path: Path) -> list[Attraction]:
     fmt = _inventory_format(header)
     has_veg = _full_inventory_has_veg_column(header)
     has_city = _full_inventory_has_city_column(header)
+    has_maps = _full_inventory_has_maps_column(header)
     items: list[Attraction] = []
     for row in rows[1:]:
         parsed: Attraction | None = None
         if fmt == "compact":
-            parsed = _parse_compact_row(row)
+            parsed = _parse_compact_row(row, header)
         elif fmt == "full_hours":
             parsed = _parse_inventory_row(
-                row, with_hours=True, has_veg_column=has_veg, has_city_column=has_city
+                row,
+                with_hours=True,
+                has_veg_column=has_veg,
+                has_city_column=has_city,
+                has_maps_column=has_maps,
+                header=header,
             )
         elif fmt == "full_legacy":
-            parsed = _parse_inventory_row(row, with_hours=False)
+            parsed = _parse_inventory_row(
+                row, with_hours=False, has_maps_column=has_maps, header=header
+            )
         if parsed:
             items.append(parsed)
     return items
@@ -711,17 +775,25 @@ def read_inventory_from_uploaded(uploaded_path: Path) -> list[Attraction]:
     fmt = _inventory_format(header)
     has_veg = _full_inventory_has_veg_column(header)
     has_city = _full_inventory_has_city_column(header)
+    has_maps = _full_inventory_has_maps_column(header)
     items: list[Attraction] = []
     for row in rows[1:]:
         parsed: Attraction | None = None
         if fmt == "compact":
-            parsed = _parse_compact_row(row)
+            parsed = _parse_compact_row(row, header)
         elif fmt == "full_hours":
             parsed = _parse_inventory_row(
-                row, with_hours=True, has_veg_column=has_veg, has_city_column=has_city
+                row,
+                with_hours=True,
+                has_veg_column=has_veg,
+                has_city_column=has_city,
+                has_maps_column=has_maps,
+                header=header,
             )
         elif fmt == "full_legacy":
-            parsed = _parse_inventory_row(row, with_hours=False)
+            parsed = _parse_inventory_row(
+                row, with_hours=False, has_maps_column=has_maps, header=header
+            )
         if parsed:
             items.append(parsed)
     return items
@@ -762,6 +834,6 @@ def profile_and_inventory_as_text(workbook_path: Path) -> str:
         lines.append(
             f"{a.id} | {a.nome} | {a.horario_funcionamento} | cap={a.capacidade} | "
             f"plog={a.peso_plog} | cohen={a.peso_cohen} | tempo={a.tempo_horas}h | "
-            f"cidade={a.cidade or '—'} | {a.descricao}"
+            f"cidade={a.cidade or '—'} | maps={a.maps_url or '—'} | {a.descricao}"
         )
     return "\n".join(lines)

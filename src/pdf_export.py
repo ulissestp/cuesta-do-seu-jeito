@@ -21,6 +21,7 @@ from reportlab.platypus import (
 from src.app_paths import logo_path
 from src.branding import APP_NAME, APP_TAGLINE
 from src.itinerary_engine import DayPlan, ItineraryResult, ScheduleBlock, _fmt_time, _lodging_options_summary
+from src.maps_links import maps_pdf_html
 
 PAGE_W, PAGE_H = A4
 HEADER_H = 2.4 * cm
@@ -223,6 +224,8 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
         content = Paragraph(f"<b>{block.title}</b>", title)
     else:
         detail_html = block.detail.replace("\n", "<br/>")
+        if block.maps_url:
+            detail_html += maps_pdf_html(block.maps_url)
         content = Paragraph(f"<b>{block.title}</b><br/>{detail_html}", title)
 
     row = Table(

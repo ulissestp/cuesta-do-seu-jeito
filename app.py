@@ -37,6 +37,7 @@ from src.excel_io import (
 )
 from src.itinerary_engine import itinerary_to_markdown
 from src.pdf_export import build_pdf, roteiro_pdf_filename
+from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 from src.roteiro_service import gerar_roteiro_da_planilha
 from src.session_store import load_last_workbook, remember_workbook
 
@@ -59,6 +60,8 @@ def _init_state() -> None:
         remember_workbook(st.session_state.workbook_path)
     if "itinerary_result" not in st.session_state:
         st.session_state.itinerary_result = None
+    if "last_anamnese_pdf" not in st.session_state:
+        st.session_state.last_anamnese_pdf = None
 
 
 def _show_scores_panel(profile: TouristProfile) -> None:
@@ -258,6 +261,40 @@ def step_roteiro_pdf() -> None:
     )
 
 
+def step_anamnese_pdf() -> None:
+    st.subheader("4. Ficha de anamnese e termo de risco (PDF)")
+    st.caption(
+        "Modelo imprimível em A4 — **uma ficha por participante**, "
+        "gerada conforme o número de pessoas do perfil."
+    )
+    profile = read_profile(st.session_state.workbook_path)
+    copies = max(1, int(profile.numero_pessoas)) if profile.numero_pessoas else 1
+    st.info(f"Serão geradas **{copies}** ficha(s) em branco para o grupo.")
+
+    if st.button("Gerar PDF das fichas de anamnese", type="primary"):
+        localidade = f"{profile.cidades[0]}/SP" if profile.cidades else "Botucatu/SP"
+        pdf_path = OUTPUT_DIR / anamnese_pdf_filename(
+            profile.nome_grupo or "grupo",
+            copies=copies,
+        )
+        build_anamnese_pdf(
+            pdf_path,
+            copies=copies,
+            nome_grupo=profile.nome_grupo,
+            localidade=localidade,
+        )
+        st.session_state.last_anamnese_pdf = pdf_path
+        st.success(f"PDF gerado: `{pdf_path}`")
+
+    if st.session_state.get("last_anamnese_pdf") and Path(st.session_state.last_anamnese_pdf).exists():
+        st.download_button(
+            "Baixar fichas (PDF)",
+            Path(st.session_state.last_anamnese_pdf).read_bytes(),
+            file_name=Path(st.session_state.last_anamnese_pdf).name,
+            mime="application/pdf",
+        )
+
+
 def _index_or_zero(options: list[str], value: str) -> int:
     if is_form_blank(value):
         return 0
@@ -281,7 +318,7 @@ def main() -> None:
     _init_state()
 
     st.title(f"🧭 {APP_NAME}")
-    st.markdown("Perfil → inventário → **score automático (seção 4)** → PDF do roteiro.")
+    st.markdown("Perfil → inventário → **score automático (seção 4)** → PDF do roteiro → **ficha anamnese**.")
 
     st.sidebar.header("Arquivo de trabalho")
     st.sidebar.code(str(st.session_state.workbook_path), language=None)
@@ -302,13 +339,17 @@ def main() -> None:
         st.session_state.pop("last_pdf", None)
         st.rerun()
 
-    tab1, tab2, tab3 = st.tabs(["1. Perfil", "2. Inventário", "3. Roteiro PDF"])
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["1. Perfil", "2. Inventário", "3. Roteiro PDF", "4. Ficha anamnese"]
+    )
     with tab1:
         step_profile()
     with tab2:
         step_inventory()
     with tab3:
         step_roteiro_pdf()
+    with tab4:
+        step_anamnese_pdf()
 
 
 if __name__ == "__main__":
