@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import threading
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +17,8 @@ from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 
 from src.app_paths import output_dir, project_root
-from src.branding import APP_NAME, APP_TAGLINE
+from src.app_icon import ensure_app_icon
+from src.branding import desktop_header_text, desktop_window_title
 from src.excel_io import (
     COHEN_QUESTIONS,
     CIDADES_ROTEIRO,
@@ -90,9 +92,15 @@ def _score_display(value: int) -> str:
 class RoteiroDesktopApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
-        self.title(APP_NAME)
+        self.title(desktop_window_title())
         self.geometry("1120x780")
         self.minsize(960, 640)
+        icon = ensure_app_icon()
+        if icon is not None:
+            try:
+                self.iconbitmap(default=str(icon))
+            except tk.TclError:
+                pass
 
         last = load_last_workbook()
         if last is not None:
@@ -105,6 +113,7 @@ class RoteiroDesktopApp(ctk.CTk):
         remember_workbook(self.workbook_path)
         self.last_pdf: Path | None = None
         self.last_anamnese_pdf: Path | None = None
+        self._pdf_job_running = False
         self.itinerary_result = None
 
         self.plog_combos: dict[str, ctk.CTkComboBox] = {}
@@ -121,7 +130,7 @@ class RoteiroDesktopApp(ctk.CTk):
 
         ctk.CTkLabel(
             header,
-            text=f"{APP_NAME} · {APP_TAGLINE}",
+            text=desktop_header_text(),
             font=ctk.CTkFont(size=18, weight="bold"),
         ).pack(side="left", padx=16, pady=12)
 
@@ -322,13 +331,14 @@ class RoteiroDesktopApp(ctk.CTk):
         top = ctk.CTkFrame(parent, fg_color="transparent")
         top.pack(fill="x", pady=8)
 
-        ctk.CTkButton(
+        self.btn_generate_pdf = ctk.CTkButton(
             top,
             text="Calcular roteiro e gerar PDF",
             height=40,
             font=ctk.CTkFont(weight="bold"),
             command=self._generate_pdf,
-        ).pack(side="left")
+        )
+        self.btn_generate_pdf.pack(side="left")
 
         ctk.CTkButton(top, text="Abrir PDF", command=self._open_pdf).pack(side="left", padx=8)
         ctk.CTkButton(top, text="Abrir pasta de saída", command=self._open_output_folder).pack(
@@ -350,8 +360,8 @@ class RoteiroDesktopApp(ctk.CTk):
         ctk.CTkLabel(
             parent,
             text=(
-                "Gera PDF em branco para impressão (A4), uma ficha por participante "
-                "conforme o número de pessoas do perfil do grupo."
+                "Gera um PDF em branco para impressão (A4): anamnese e termo em páginas "
+                "separadas. Imprima uma cópia por participante."
             ),
             wraplength=900,
             justify="left",
@@ -361,7 +371,7 @@ class RoteiroDesktopApp(ctk.CTk):
         row.pack(fill="x", pady=4)
         ctk.CTkButton(
             row,
-            text="Gerar PDF das fichas",
+            text="Gerar PDF da ficha",
             height=40,
             font=ctk.CTkFont(weight="bold"),
             command=self._generate_anamnese_pdf,
@@ -525,6 +535,8 @@ class RoteiroDesktopApp(ctk.CTk):
         self.inv_count_label.configure(text=f"{len(items)} atração(ões)")
 
     def _generate_pdf(self) -> None:
+        if self._pdf_job_running:
+            return
         try:
             profile = self._profile_from_form()
             missing = validate_profile_for_roteiro(profile)
@@ -544,20 +556,56 @@ class RoteiroDesktopApp(ctk.CTk):
                 )
                 if not proceed:
                     return
-            result = gerar_roteiro_da_planilha(self.workbook_path)
-            self.itinerary_result = result
-            profile = result.profile
-            pdf_path = OUT / roteiro_pdf_filename(profile.nome_grupo)
-            build_pdf(result, pdf_path)
-            self.last_pdf = pdf_path
-            self.preview.delete("0.0", "end")
-            self.preview.insert("0.0", itinerary_to_markdown(result))
-            self.pdf_status.configure(text=f"PDF gerado: {pdf_path}")
-            messagebox.showinfo("Concluído", f"Roteiro PDF salvo em:\n{pdf_path}")
         except ValueError as exc:
             messagebox.showerror("Inventário", str(exc))
+            return
         except Exception as exc:
             messagebox.showerror("Erro", str(exc))
+            return
+
+        workbook = self.workbook_path
+        self._pdf_job_running = True
+        self.btn_generate_pdf.configure(state="disabled")
+        self.pdf_status.configure(text="Calculando roteiro e gerando PDF… Aguarde.")
+        self.update_idletasks()
+
+        def worker() -> None:
+            err: tuple[str, BaseException] | None = None
+            result = None
+            pdf_path: Path | None = None
+            preview_text = ""
+            try:
+                result = gerar_roteiro_da_planilha(workbook)
+                pdf_path = OUT / roteiro_pdf_filename(result.profile.nome_grupo)
+                build_pdf(result, pdf_path)
+                preview_text = itinerary_to_markdown(result)
+            except ValueError as exc:
+                err = ("inventario", exc)
+            except Exception as exc:
+                err = ("erro", exc)
+
+            def finish() -> None:
+                self._pdf_job_running = False
+                self.btn_generate_pdf.configure(state="normal")
+                if err:
+                    kind, exc = err
+                    if kind == "inventario":
+                        messagebox.showerror("Inventário", str(exc))
+                    else:
+                        messagebox.showerror("Erro", str(exc))
+                    self.pdf_status.configure(text="")
+                    return
+                assert result is not None and pdf_path is not None
+                self.itinerary_result = result
+                self.last_pdf = pdf_path
+                self.preview.delete("0.0", "end")
+                self.preview.insert("0.0", preview_text)
+                self.pdf_status.configure(text=f"PDF gerado: {pdf_path}")
+                messagebox.showinfo("Concluído", f"Roteiro PDF salvo em:\n{pdf_path}")
+
+            self.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _open_pdf(self) -> None:
         if not self.last_pdf or not self.last_pdf.exists():
@@ -568,33 +616,16 @@ class RoteiroDesktopApp(ctk.CTk):
     def _generate_anamnese_pdf(self) -> None:
         try:
             profile = read_profile(self.workbook_path)
-            copies = max(1, profile.numero_pessoas) if profile.numero_pessoas else 1
-            if profile.numero_pessoas < 1:
-                if not messagebox.askyesno(
-                    "Participantes",
-                    "O número de pessoas no perfil está vazio. Gerar 1 ficha em branco mesmo assim?",
-                ):
-                    return
-            localidade = "Botucatu/SP"
-            if profile.cidades:
-                localidade = f"{profile.cidades[0]}/SP"
-            pdf_path = OUT / anamnese_pdf_filename(
-                profile.nome_grupo or "grupo",
-                copies=copies,
-            )
+            pdf_path = OUT / anamnese_pdf_filename(profile.nome_grupo or "grupo")
             build_anamnese_pdf(
                 pdf_path,
-                copies=copies,
                 nome_grupo=profile.nome_grupo,
-                localidade=localidade,
             )
             self.last_anamnese_pdf = pdf_path
-            self.anamnese_status.configure(
-                text=f"PDF gerado: {pdf_path} ({copies} ficha(s) para impressão)"
-            )
+            self.anamnese_status.configure(text=f"PDF gerado: {pdf_path}")
             messagebox.showinfo(
                 "Ficha de anamnese",
-                f"PDF salvo em:\n{pdf_path}\n\n{copies} ficha(s) em branco (uma por participante).",
+                f"PDF salvo em:\n{pdf_path}\n\nAnamnese e termo em páginas separadas.",
             )
         except Exception as exc:
             messagebox.showerror("Erro", str(exc))

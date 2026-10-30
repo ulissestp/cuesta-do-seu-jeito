@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import math
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
-from functools import lru_cache
 
 from src.excel_io import Attraction, canonical_city_name
-from src.maps_links import clean_maps_url
+from src.maps_links import clean_maps_url, expand_maps_url, maps_url_has_embedded_coords
 
 # Centróides aproximados (lat, lng) para fallback quando o link não traz coordenadas.
 CITY_CENTROIDS: dict[str, tuple[float, float]] = {
@@ -37,29 +34,22 @@ def _parse_coords_from_url(url: str) -> LatLng | None:
     return None
 
 
-@lru_cache(maxsize=256)
-def _resolve_maps_url_cached(url: str) -> str:
-    if not url or ("maps.app.goo.gl" not in url and "goo.gl/" not in url):
-        return url
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "RoteiroTurismo/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return resp.geturl()
-    except (urllib.error.URLError, TimeoutError, ValueError):
-        return url
-
-
 def coords_for_maps_url(maps_url: str) -> LatLng | None:
+    """Coordenadas na URL ou após expandir link curto do Google Maps (com cache)."""
     url = clean_maps_url(maps_url)
     if not url:
         return None
-    direct = _parse_coords_from_url(url)
-    if direct:
-        return direct
-    expanded = _resolve_maps_url_cached(url)
-    if expanded != url:
-        return _parse_coords_from_url(expanded)
-    return None
+    point = _parse_coords_from_url(url)
+    if point:
+        return point
+    if maps_url_has_embedded_coords(url):
+        return None
+    expanded = expand_maps_url(url)
+    if expanded and expanded != url:
+        point = _parse_coords_from_url(expanded)
+        if point:
+            return point
+    return _parse_coords_from_url(expanded)
 
 
 def coords_for_city_label(cidade: str) -> LatLng | None:
@@ -95,17 +85,20 @@ def travel_minutes_between(
     *,
     same_city_hint: bool | None = None,
 ) -> int:
-    """Estima tempo de deslocamento entre dois pontos (mín. 15 min)."""
+    """Tempo de deslocamento a partir da distância (km) entre os pontos."""
     if origin and destination:
         km = haversine_km(origin, destination)
-        # ~45 km/h média regional + tempo fixo de parada/estacionamento
-        minutes = int(km / 45.0 * 60.0 + 12)
-        return max(15, min(90, minutes))
+        minutes = int(km / 45.0 * 60.0 + 10)
+        if km < 0.02:
+            return 15
+        if km < 0.3:
+            return max(10, minutes)
+        return max(15, min(120, minutes))
     if same_city_hint is True:
-        return 20
+        return 15
     if same_city_hint is False:
-        return 45
-    return 30
+        return 35
+    return 25
 
 
 def same_city(a: Attraction, b: Attraction) -> bool | None:
@@ -117,13 +110,10 @@ def same_city(a: Attraction, b: Attraction) -> bool | None:
 
 
 class GeoContext:
-    """Coordenadas resolvidas por atração (cache por id)."""
+    """Coordenadas resolvidas por atração (cache por id, sob demanda)."""
 
     def __init__(self, attractions: list[Attraction]) -> None:
         self._by_id: dict[str, LatLng | None] = {}
-        for item in attractions:
-            if item.id not in self._by_id:
-                self._by_id[item.id] = coords_for_attraction(item)
 
     def coords(self, attraction: Attraction) -> LatLng | None:
         if attraction.id in self._by_id:
@@ -132,15 +122,30 @@ class GeoContext:
         self._by_id[attraction.id] = point
         return point
 
+    def coords_resolved(self, attraction: Attraction) -> LatLng | None:
+        point = self.coords(attraction)
+        if point:
+            return point
+        return coords_for_city_label(attraction.cidade)
+
     def distance_km(self, a: Attraction, b: Attraction) -> float | None:
-        pa, pb = self.coords(a), self.coords(b)
+        pa, pb = self.coords_resolved(a), self.coords_resolved(b)
         if pa and pb:
             return haversine_km(pa, pb)
         return None
 
+    def travel_minutes_from_reference(self, origin: LatLng | None, to_attr: Attraction) -> int:
+        pb = self.coords_resolved(to_attr)
+        if origin and pb:
+            return travel_minutes_between(origin, pb)
+        return 25
+
     def travel_minutes(self, from_attr: Attraction | None, to_attr: Attraction) -> int:
-        pa = self.coords(from_attr) if from_attr else None
-        pb = self.coords(to_attr)
+        if from_attr is None:
+            return self.travel_minutes_from_reference(None, to_attr)
+        pa, pb = self.coords_resolved(from_attr), self.coords_resolved(to_attr)
+        if pa and pb:
+            return travel_minutes_between(pa, pb)
         hint = same_city(from_attr, to_attr) if from_attr else None
         return travel_minutes_between(pa, pb, same_city_hint=hint)
 

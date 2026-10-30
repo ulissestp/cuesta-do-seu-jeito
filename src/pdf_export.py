@@ -19,7 +19,8 @@ from reportlab.platypus import (
 )
 
 from src.app_paths import logo_path
-from src.branding import APP_NAME, APP_TAGLINE
+from src.attraction_images import attraction_thumbnail_flowable
+from src.branding import APP_NAME_PDF, APP_TAGLINE, APP_VERSION, pdf_version_label
 from src.itinerary_engine import DayPlan, ItineraryResult, ScheduleBlock, _fmt_time, _lodging_options_summary
 from src.maps_links import maps_pdf_html
 
@@ -81,13 +82,17 @@ def _draw_page_chrome(canvas, doc, client_name: str) -> None:
 
     canvas.setFillColor(colors.white)
     canvas.setFont("Helvetica-Bold", 13)
-    canvas.drawString(3.6 * cm, PAGE_H - 1.15 * cm, APP_NAME)
+    canvas.drawString(3.6 * cm, PAGE_H - 1.15 * cm, APP_NAME_PDF)
     canvas.setFont("Helvetica", 9)
-    canvas.drawString(3.6 * cm, PAGE_H - 1.55 * cm, f"{APP_TAGLINE} · {client_name}")
+    canvas.drawString(
+        3.6 * cm, PAGE_H - 1.55 * cm, f"{APP_TAGLINE} · {client_name} · {pdf_version_label()}"
+    )
 
     canvas.setFont("Helvetica", 8)
     canvas.setFillColor(COLOR_MUTED)
-    canvas.drawCentredString(PAGE_W / 2, 0.65 * cm, f"Página {doc.page}")
+    canvas.drawCentredString(
+        PAGE_W / 2, 0.65 * cm, f"Página {doc.page} · v{APP_VERSION}"
+    )
     canvas.restoreState()
 
 
@@ -100,7 +105,7 @@ def _cover_block(client_name: str, duracao: int, body: ParagraphStyle, brand: Pa
         logo_cell.append(Spacer(1, 4.2 * cm))
 
     text = Paragraph(
-        f"<b>{APP_NAME}</b><br/>{APP_TAGLINE}<br/><br/>"
+        f"<b>{APP_NAME_PDF}</b><br/>{APP_TAGLINE}<br/>{pdf_version_label()}<br/><br/>"
         f"<b>Cliente:</b> {client_name}<br/>"
         f"<b>Duração:</b> {duracao} dia(s)",
         brand,
@@ -210,7 +215,17 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
     elif block.kind == "lodging":
         marker = "☾"
 
-    time_cell = Paragraph(f"<b>{_time_label(block)}</b>", body)
+    time_cell: list = [Paragraph(f"<b>{_time_label(block)}</b>", body)]
+    if block.kind in ("visit", "lunch"):
+        thumb = attraction_thumbnail_flowable(
+            maps_url=block.maps_url,
+            place_title=block.title,
+        )
+        if thumb:
+            time_cell.append(Spacer(1, 0.06 * cm))
+            time_cell.append(thumb)
+
+    time_cell = time_cell if len(time_cell) > 1 else time_cell[0]
     marker_colors = {
         "visit": "#3182CE",
         "lunch": "#805AD5",
@@ -284,7 +299,9 @@ def build_pdf(result: ItineraryResult, output_path: Path) -> Path:
         leftMargin=1.8 * cm,
         topMargin=HEADER_H + 0.5 * cm,
         bottomMargin=FOOTER_H + 0.5 * cm,
-        title=f"{APP_NAME} — {client_name}",
+        title=f"{APP_NAME_PDF} — {client_name}",
+        author=APP_NAME_PDF,
+        subject=f"{APP_TAGLINE} · v{APP_VERSION}",
     )
 
     styles = getSampleStyleSheet()

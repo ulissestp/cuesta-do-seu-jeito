@@ -10,6 +10,7 @@ from src.group_scores import GroupScores, build_technical_analysis
 from src.maps_links import maps_markdown_line, try_shorten_maps_url
 
 DAY_END_HOUR = 18
+DAY_LATEST_FIRST_START = time(9, 30)
 DEFAULT_OPEN = time(8, 0)
 DEFAULT_CLOSE = time(18, 0)
 MIN_VISIT_MINUTES = 45
@@ -292,7 +293,7 @@ def _theme_for_day(attractions: list[Attraction]) -> str:
 
 
 def _day_anchor(day_number: int) -> datetime:
-    return datetime(2026, 1, day_number, 9, 30)
+    return datetime(2026, 1, day_number, DAY_LATEST_FIRST_START.hour, DAY_LATEST_FIRST_START.minute)
 
 
 def _combine(day_anchor: datetime, hour_minute: time) -> datetime:
@@ -356,6 +357,12 @@ def _schedule_visit(
     return start, end
 
 
+def _transit_detail_km(km: float | None, minutes: int, label: str) -> str:
+    if km is not None:
+        return f"Deslocamento {label} (~{km:.1f} km, {minutes} minutos)."
+    return f"Deslocamento {label} ({minutes} minutos)."
+
+
 def _transit_detail(
     origin: Attraction,
     destination: Attraction,
@@ -369,6 +376,33 @@ def _transit_detail(
             f"(~{km:.1f} km, {minutes} minutos)."
         )
     return f"Trânsito entre as localidades ({minutes} minutos)."
+
+
+def _append_transit_from_reference(
+    blocks: list[ScheduleBlock],
+    visit_start: datetime,
+    minutes: int,
+    destination: Attraction,
+    geo: GeoContext,
+    origin: LatLng | None,
+) -> None:
+    if minutes <= 0:
+        return
+    start = visit_start - timedelta(minutes=minutes)
+    km = None
+    dest = geo.coords_resolved(destination)
+    if origin and dest:
+        km = haversine_km(origin, dest)
+    label = f"até {_visit_title(destination)}"
+    blocks.append(
+        ScheduleBlock(
+            start=start,
+            end=visit_start,
+            title="Deslocamento",
+            detail=_transit_detail_km(km, minutes, label),
+            kind="transit",
+        )
+    )
 
 
 def _append_transit(
@@ -413,14 +447,23 @@ def _schedule_from_pool(
     for attraction in pool:
         if attraction.id in used_ids:
             continue
-        transit_min = geo.travel_minutes(last_attr, attraction) if last_attr else 0
-        cursor_after_transit = cursor + timedelta(minutes=transit_min)
+        if last_attr is None:
+            open_t = attraction.horario_abertura or DEFAULT_OPEN
+            if open_t > DAY_LATEST_FIRST_START:
+                continue
+            transit_min = geo.travel_minutes_from_reference(day_start, attraction)
+            cursor_after_transit = _combine(day_anchor, DAY_LATEST_FIRST_START)
+        else:
+            transit_min = geo.travel_minutes(last_attr, attraction)
+            cursor_after_transit = cursor + timedelta(minutes=transit_min)
         if cursor_after_transit >= time_limit:
             continue
         slot = _schedule_visit(cursor_after_transit, attraction, day_anchor)
         if not slot:
             continue
         start, end = slot
+        if last_attr is None and start > _combine(day_anchor, DAY_LATEST_FIRST_START):
+            continue
         if end > time_limit:
             continue
         candidates.append((attraction, start, end, transit_min))
@@ -431,7 +474,9 @@ def _schedule_from_pool(
     candidates.sort(key=lambda item: _geo_sort_key(item[0], reference, geo, plog, cohen))
     attraction, start, end, transit_min = candidates[0]
 
-    if last_attr and transit_min > 0:
+    if last_attr is None and transit_min > 0:
+        _append_transit_from_reference(blocks, start, transit_min, attraction, geo, day_start)
+    elif last_attr and transit_min > 0:
         cursor = _append_transit(blocks, cursor, transit_min, last_attr, attraction, geo)
 
     blocks.append(

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from src.branding import APP_NAME
+from src.branding import desktop_window_title
 from src.form_constants import (
     FORM_BLANK,
     PERFIL_FORM_OPCOES,
@@ -264,31 +264,22 @@ def step_roteiro_pdf() -> None:
 def step_anamnese_pdf() -> None:
     st.subheader("4. Ficha de anamnese e termo de risco (PDF)")
     st.caption(
-        "Modelo imprimível em A4 — **uma ficha por participante**, "
-        "gerada conforme o número de pessoas do perfil."
+        "Modelo imprimível em A4 — **uma ficha por participante** (imprima quantas cópias precisar)."
     )
     profile = read_profile(st.session_state.workbook_path)
-    copies = max(1, int(profile.numero_pessoas)) if profile.numero_pessoas else 1
-    st.info(f"Serão geradas **{copies}** ficha(s) em branco para o grupo.")
 
-    if st.button("Gerar PDF das fichas de anamnese", type="primary"):
-        localidade = f"{profile.cidades[0]}/SP" if profile.cidades else "Botucatu/SP"
-        pdf_path = OUTPUT_DIR / anamnese_pdf_filename(
-            profile.nome_grupo or "grupo",
-            copies=copies,
-        )
+    if st.button("Gerar PDF da ficha de anamnese", type="primary"):
+        pdf_path = OUTPUT_DIR / anamnese_pdf_filename(profile.nome_grupo or "grupo")
         build_anamnese_pdf(
             pdf_path,
-            copies=copies,
             nome_grupo=profile.nome_grupo,
-            localidade=localidade,
         )
         st.session_state.last_anamnese_pdf = pdf_path
         st.success(f"PDF gerado: `{pdf_path}`")
 
     if st.session_state.get("last_anamnese_pdf") and Path(st.session_state.last_anamnese_pdf).exists():
         st.download_button(
-            "Baixar fichas (PDF)",
+            "Baixar ficha (PDF)",
             Path(st.session_state.last_anamnese_pdf).read_bytes(),
             file_name=Path(st.session_state.last_anamnese_pdf).name,
             mime="application/pdf",
@@ -314,10 +305,10 @@ def _score_form_index(value: int) -> int:
 
 
 def main() -> None:
-    st.set_page_config(page_title=APP_NAME, page_icon="🧭", layout="wide")
+    st.set_page_config(page_title=desktop_window_title(), page_icon="🧭", layout="wide")
     _init_state()
 
-    st.title(f"🧭 {APP_NAME}")
+    st.title(f"🧭 {desktop_window_title()}")
     st.markdown("Perfil → inventário → **score automático (seção 4)** → PDF do roteiro → **ficha anamnese**.")
 
     st.sidebar.header("Arquivo de trabalho")

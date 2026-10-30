@@ -4,6 +4,8 @@ from pathlib import Path
 block_cipher = None
 # SPECPATH = pasta onde está o .spec (PyInstaller)
 project = Path(SPECPATH).resolve()
+_app_icon = project / "data" / "logo_cuesta.ico"
+_version_info = project / "build" / "version_info.txt"
 
 a = Analysis(
     [str(project / "desktop_main.py")],
@@ -43,5 +45,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=str(_app_icon) if _app_icon.is_file() else None,
+    version=str(_version_info) if _version_info.is_file() else None,
 )

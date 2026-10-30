@@ -14,8 +14,8 @@ from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 def main() -> None:
     out_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / anamnese_pdf_filename("Modelo", copies=1)
-    build_anamnese_pdf(path, copies=1, nome_grupo="")
+    path = out_dir / anamnese_pdf_filename("Modelo")
+    build_anamnese_pdf(path, nome_grupo="")
     print(f"Gerado: {path}")
 
 

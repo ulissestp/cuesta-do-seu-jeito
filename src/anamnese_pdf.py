@@ -10,10 +10,15 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from src.branding import APP_NAME
+from src.app_paths import logo_path
+from src.branding import APP_NAME_PDF, APP_VERSION
+from src.pdf_export import COLOR_MUTED, COLOR_PRIMARY, FOOTER_H, HEADER_H, PAGE_H, PAGE_W
+
+# Espaço para marcar opções à mão (nbsp evita colapso no Paragraph do ReportLab).
+_CHECK = "(&nbsp;&nbsp;&nbsp;)"
 
 
-def anamnese_pdf_filename(nome_grupo: str, *, copies: int = 1, when: datetime | None = None) -> str:
+def anamnese_pdf_filename(nome_grupo: str, *, when: datetime | None = None) -> str:
     when = when or datetime.now()
     stamp = when.strftime("%H%M")
     safe = (
@@ -21,15 +26,47 @@ def anamnese_pdf_filename(nome_grupo: str, *, copies: int = 1, when: datetime | 
         or "grupo"
     )
     safe = safe.replace(" ", "_")
-    suffix = f"_{copies}fichas" if copies > 1 else ""
-    return f"Ficha_Anamnese_{safe}{suffix}_{stamp}.pdf"
+    return f"Ficha_Anamnese_{safe}_{stamp}.pdf"
+
+
+def _draw_anamnese_page_chrome(canvas, doc, nome_grupo: str) -> None:
+    grupo = (nome_grupo or "").strip() or "—"
+    canvas.saveState()
+    canvas.setFillColor(COLOR_PRIMARY)
+    canvas.rect(0, PAGE_H - HEADER_H, PAGE_W, HEADER_H, fill=1, stroke=0)
+
+    logo = logo_path()
+    if logo.exists():
+        canvas.drawImage(
+            str(logo),
+            1.5 * cm,
+            PAGE_H - HEADER_H + 0.25 * cm,
+            width=1.8 * cm,
+            height=1.8 * cm,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+
+    canvas.setFillColor(colors.white)
+    canvas.setFont("Helvetica-Bold", 13)
+    canvas.drawString(3.6 * cm, PAGE_H - 1.15 * cm, APP_NAME_PDF)
+    canvas.setFont("Helvetica-Bold", 10)
+    grupo_line = f"Grupo: {grupo}"
+    max_w = PAGE_W - 3.6 * cm - 1.2 * cm
+    while canvas.stringWidth(grupo_line, "Helvetica-Bold", 10) > max_w and len(grupo_line) > 12:
+        grupo_line = grupo_line[:-4] + "…"
+    canvas.drawString(3.6 * cm, PAGE_H - 1.55 * cm, grupo_line)
+
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColor(COLOR_MUTED)
+    canvas.drawCentredString(PAGE_W / 2, 0.65 * cm, f"Página {doc.page} · v{APP_VERSION}")
+    canvas.restoreState()
 
 
 def _form_story(
     styles: dict[str, ParagraphStyle],
     *,
     nome_grupo: str,
-    localidade: str,
     year: int,
 ) -> list:
     title = styles["title"]
@@ -39,22 +76,17 @@ def _form_story(
     term = styles["term"]
 
     def p(text: str) -> Paragraph:
-        return Paragraph(text, body)
+        return Paragraph(text.replace("( )", _CHECK), body)
 
     story: list = []
-    if nome_grupo.strip():
-        story.append(
-            Paragraph(
-                f"<b>{APP_NAME}</b> — Grupo/roteiro: {nome_grupo.strip()} "
-                f"(preencher uma ficha por participante)",
-                small,
-            )
-        )
-        story.append(Spacer(1, 0.15 * cm))
+    story.append(
+        Paragraph("Imprimir uma cópia por participante.", small)
+    )
+    story.append(Spacer(1, 0.15 * cm))
 
     story.extend(
         [
-            Paragraph("FICHA DE ANAMNESE MÉDICA E TERMO DE COMPROMISSO E RISCO", title),
+            Paragraph("FICHA DE ANAMNESE MÉDICA", title),
             Spacer(1, 0.15 * cm),
             Paragraph("1. IDENTIFICAÇÃO DO PARTICIPANTE", h2),
             p("Nome completo: _________________________________________________________________"),
@@ -109,8 +141,9 @@ def _form_story(
             p("[Mulheres] Gestante? ( ) Não ( ) Sim. Semanas: ______"),
             p("Outra condição de saúde a informar:"),
             obs_box,
-            Spacer(1, 0.25 * cm),
-            Paragraph("4. TERMO DE CONHECIMENTO DE RISCO, RESPONSABILIDADE E DECLARAÇÃO", h2),
+            PageBreak(),
+            Paragraph("TERMO DE CONHECIMENTO DE RISCO, RESPONSABILIDADE E DECLARAÇÃO", title),
+            Spacer(1, 0.2 * cm),
             Paragraph(
                 "<b>Conhecimento dos riscos:</b> Declaro estar ciente de que a atividade de "
                 "turismo/aventura contratada envolve deslocamentos em ambientes naturais, exposição a "
@@ -136,7 +169,7 @@ def _form_story(
                 term,
             ),
             Spacer(1, 0.3 * cm),
-            p(f"{localidade}, ______ de __________________ de {year}."),
+            p(f"________________________________________, ______ de __________________ de {year}."),
             Spacer(1, 0.8 * cm),
         ]
     )
@@ -172,23 +205,21 @@ def _form_story(
 def build_anamnese_pdf(
     output_path: Path,
     *,
-    copies: int = 1,
     nome_grupo: str = "",
-    localidade: str = "Botucatu/SP",
     year: int | None = None,
 ) -> Path:
-    """Gera PDF imprimível (A4). `copies` = uma página-ficha por participante."""
+    """Gera um PDF imprimível (A4): anamnese + termo em páginas separadas."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    copies = max(1, int(copies))
     year = year or datetime.now().year
+    grupo_header = (nome_grupo or "").strip()
 
     doc = SimpleDocTemplate(
         str(output_path),
         pagesize=A4,
         leftMargin=1.8 * cm,
         rightMargin=1.8 * cm,
-        topMargin=1.5 * cm,
-        bottomMargin=1.5 * cm,
+        topMargin=HEADER_H + 0.5 * cm,
+        bottomMargin=FOOTER_H + 0.5 * cm,
         title="Ficha de Anamnese Médica e Termo de Compromisso e Risco",
     )
     base = getSampleStyleSheet()
@@ -218,26 +249,15 @@ def build_anamnese_pdf(
         ),
     }
 
-    story: list = []
-    for i in range(copies):
-        if i > 0:
-            story.append(PageBreak())
-        story.extend(
-            _form_story(
-                styles,
-                nome_grupo=nome_grupo,
-                localidade=localidade,
-                year=year,
-            )
-        )
-    if copies > 1:
-        story.append(Spacer(1, 0.15 * cm))
-        story.append(
-            Paragraph(
-                f"Total: {copies} fichas em branco para impressão (uma por participante).",
-                styles["small"],
-            )
-        )
+    story = _form_story(
+        styles,
+        nome_grupo=nome_grupo,
+        year=year,
+    )
 
-    doc.build(story)
+    doc.build(
+        story,
+        onFirstPage=lambda c, d: _draw_anamnese_page_chrome(c, d, grupo_header),
+        onLaterPages=lambda c, d: _draw_anamnese_page_chrome(c, d, grupo_header),
+    )
     return output_path

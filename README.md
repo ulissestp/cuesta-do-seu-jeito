@@ -1,12 +1,30 @@
-# Roteiro Turístico — Projeto Integrador
+# CUESTA DO SEU JEITO — Roteiros Turísticos (RT)
 
-Formulário **desktop** (recomendado) ou web (Streamlit), **sem IA**.
+**Versão 1.0 Beta** · Gerador de roteiros personalizados com base no perfil do grupo (Plog / Cohen), inventário em Excel e exportação em PDF.
 
-## Versão desktop (Windows)
+Aplicativo **desktop para Windows** (recomendado). Versão web opcional via Streamlit. **Não utiliza IA** — a lógica é determinística e auditável.
 
-### Executar direto (desenvolvimento)
+---
 
-Duplo clique em **`Iniciar_Roteiro.bat`** ou:
+## Documentação
+
+| Documento | Público | Conteúdo |
+|-----------|---------|----------|
+| [Manual do usuário](docs/MANUAL_DO_USUARIO.md) | Operadores, guias, equipe comercial | Instalação, abas do programa, planilha, PDFs, dicas |
+| [Manual em PDF](docs/Manual_CUESTA_RT_v1.0_Beta.pdf) | Operadores | Texto do manual + **espaços reservados** para colar capturas de tela |
+| [Documentação técnica](docs/DOCUMENTACAO_TECNICA.md) | Desenvolvedores | Arquitetura, módulos, motor de roteiro, build |
+
+---
+
+## Início rápido (Windows)
+
+### Executável
+
+1. Abra `dist\RoteiroTurismo.exe` (ou copie a pasta `dist` para onde preferir).
+2. Preencha **Perfil** → importe **Inventário** → gere **Roteiro PDF** e/ou **Ficha anamnese**.
+3. Arquivos gerados ficam em `output\` (ao lado do `.exe` quando empacotado).
+
+### Desenvolvimento
 
 ```powershell
 cd C:\Users\USI-SEVEN\Developer\roteiro-turismo
@@ -14,35 +32,59 @@ pip install -r requirements.txt
 python desktop_main.py
 ```
 
-### Gerar executável (.exe)
+Ou duplo clique em `Iniciar_Roteiro.bat` (a partir da raiz do projeto).
+
+### Compilar o `.exe`
+
+Feche o programa antes de compilar.
 
 ```powershell
-cd C:\Users\USI-SEVEN\Developer\roteiro-turismo
 powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
 ```
 
-O arquivo ficará em `dist\RoteiroTurismo.exe`. Copie a pasta `dist` ou apenas o `.exe` (a planilha modelo já vem embutida).
+Saída: `dist\RoteiroTurismo.exe` (logo e versão **1.0 Beta** embutidos).
 
-## Etapas do programa
-
-1. **Perfil** — seções 1–3 + score automático (seção 4).
-2. **Inventário** — importar `.xlsx`.
-3. **Roteiro PDF** — gera PDF com cabeçalho, quadro-resumo e linha do tempo.
-
-## Versão web (opcional)
+### Streamlit (opcional)
 
 ```powershell
 streamlit run app.py
 ```
 
-## Lógica do roteiro
+---
 
-- **Média Plog** / **Média Cohen** / **fator restritivo** (seção 4).
-- Horários de funcionamento de cada atração.
-- **Modelo de inventário:** `data/Modelo_Inventario_Turistico.xlsx` (ID, Atração, Abre, Fecha, Cap., Plog, Cohen).
-- Descrição breve no roteiro e no PDF.
-- Almoço 12h–13h30, deslocamento 30 min, fim às 18h.
+## Estrutura do repositório
 
-Saídas em `output/`. Modelo: `data/Projeto_Integrador_Turismo_Final.xlsx`.
+```
+roteiro-turismo/
+├── desktop_main.py      # Interface desktop (CustomTkinter)
+├── app.py               # Interface web (Streamlit)
+├── data/                # Logo, modelos Excel, chave Maps (opcional)
+├── dist/                # Executável gerado
+├── docs/                # Manual e documentação técnica
+├── output/              # Planilhas de sessão e PDFs (modo dev)
+├── scripts/             # build_desktop.ps1, utilitários
+└── src/                 # Lógica de negócio (Excel, roteiro, PDF)
+```
 
-O **PDF final** inclui cabeçalho personalizado, quadro-resumo do cliente e linha do tempo por dia.
+---
+
+## Modelos de planilha
+
+| Arquivo | Uso |
+|---------|-----|
+| `data/Projeto_Integrador_Turismo_Final.xlsx` | Modelo de sessão (perfil + abas) |
+| `data/Modelo_Inventario_Turistico.xlsx` | Inventário de referência (coluna **Maps** recomendada) |
+
+---
+
+## Requisitos
+
+- **Windows 10/11** (desktop)
+- **Python 3.11+** (desenvolvimento)
+- **Internet** (opcional mas recomendada): expandir links curtos do Google Maps para calcular distâncias entre atrativos
+
+---
+
+## Licença e créditos
+
+Projeto integrador — CUESTA DO SEU JEITO. Consulte a equipe responsável pelo uso comercial e distribuição.
