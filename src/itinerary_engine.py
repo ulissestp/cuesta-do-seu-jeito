@@ -25,6 +25,7 @@ class ScheduleBlock:
     detail: str
     kind: str  # visit | transit | lunch | end | lodging
     maps_url: str = ""
+    image_url: str = ""
 
 
 @dataclass
@@ -305,6 +306,15 @@ def _maps_plain_suffix(maps_url: str) -> str:
     return f" Localização: {url}" if url else ""
 
 
+def _valor_clause(attraction: Attraction) -> str:
+    valor = (attraction.valor or "").strip()
+    if not valor:
+        return ""
+    if valor.lower().startswith("valor"):
+        return f" {valor}"
+    return f" Valor: {valor}."
+
+
 def _visit_detail(attraction: Attraction, start: datetime, end: datetime) -> str:
     elapsed_h = (end - start).total_seconds() / 3600
     city = _city_label(attraction)
@@ -312,6 +322,7 @@ def _visit_detail(attraction: Attraction, start: datetime, end: datetime) -> str
         f"Cidade: {city}. {attraction.descricao} "
         f"Tempo médio de visitação: {attraction.tempo_horas:g} h "
         f"(neste roteiro: {elapsed_h:.1f} h)."
+        f"{_valor_clause(attraction)}"
     )
 
 
@@ -319,6 +330,7 @@ def _lunch_detail(attraction: Attraction, profile: TouristProfile) -> str:
     return (
         f"Pausa para almoço (1h30min, entre 12h00 e 13h30). "
         f"Cidade: {_city_label(attraction)}. {attraction.descricao}"
+        f"{_valor_clause(attraction)}"
     )
 
 
@@ -328,7 +340,9 @@ def _lodging_options_summary(attractions: list[Attraction]) -> str:
     lines = ["Sugestões para pernoite — não entram na programação de visitas do dia."]
     for i, attraction in enumerate(attractions, 1):
         maps_part = _maps_plain_suffix(attraction.maps_url)
-        lines.append(f"Opção {i}: {_visit_title(attraction)}. {attraction.descricao}{maps_part}")
+        lines.append(
+            f"Opção {i}: {_visit_title(attraction)}. {attraction.descricao}{_valor_clause(attraction)}{maps_part}"
+        )
     return "\n".join(lines)
 
 
@@ -487,6 +501,7 @@ def _schedule_from_pool(
             detail=_visit_detail(attraction, start, end),
             kind="visit",
             maps_url=attraction.maps_url,
+            image_url=attraction.image_url,
         )
     )
     used_ids.add(attraction.id)
@@ -568,6 +583,7 @@ def build_itinerary(
                 detail=lunch_detail,
                 kind="lunch",
                 maps_url=lunch_attr.maps_url if lunch_attr else "",
+                image_url=lunch_attr.image_url if lunch_attr else "",
             )
         )
         cursor = lunch_end

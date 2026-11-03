@@ -41,6 +41,8 @@ FULL_INVENTORY_HEADERS = (
     "Descrição Breve",
     "Cidade",
     "Maps",
+    "Imagem",
+    "Ingresso",
 )
 
 CIDADES_ROTEIRO = ("Botucatu", "Pardinho", "Bofete")
@@ -181,6 +183,8 @@ class Attraction:
     descricao: str
     cidade: str = ""
     maps_url: str = ""
+    image_url: str = ""
+    valor: str = ""
 
     @property
     def horario_funcionamento(self) -> str:
@@ -443,6 +447,69 @@ def _full_inventory_has_maps_column(header: tuple[Any, ...]) -> bool:
     return any("maps" in label for label in labels)
 
 
+_EMPTY_VALOR = {
+    "",
+    "none",
+    "—",
+    "-",
+    "n/a",
+    "na",
+    "0",
+    "0,00",
+    "0.00",
+    "r$",
+    "r$ 0,00",
+    "r$0,00",
+    "r$ 0.00",
+}
+
+
+def format_valor_atrativo(value: Any) -> str:
+    """Texto do ingresso para o roteiro. Vazio quando a célula não tem valor."""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        if value == 0:
+            return ""
+        formatted = f"{value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {formatted}"
+    text = str(value or "").strip()
+    if text.lower() in _EMPTY_VALOR:
+        return ""
+    return text
+
+
+def _valor_column_index(header: tuple[Any, ...] | None) -> int | None:
+    if not header:
+        return None
+    for idx, cell in enumerate(header):
+        label = _normalize_header_cell(cell)
+        if any(token in label for token in ("ingresso", "ingesso", "valor", "preco")):
+            return idx
+    return None
+
+
+def _valor_from_row(row: tuple[Any, ...], header: tuple[Any, ...] | None) -> str:
+    valor_idx = _valor_column_index(header)
+    if valor_idx is None or len(row) <= valor_idx:
+        return ""
+    return format_valor_atrativo(row[valor_idx])
+
+
+def _image_url_from_row(row: tuple[Any, ...], header: tuple[Any, ...] | None) -> str:
+    if not header:
+        return ""
+    image_idx = _column_index_by_header(header, "imagem")
+    if image_idx is None:
+        image_idx = _column_index_by_header(header, "foto")
+    if image_idx is None or len(row) <= image_idx:
+        return ""
+    text = str(row[image_idx] or "").strip()
+    if text.lower().startswith(("http://", "https://")):
+        return text
+    return ""
+
+
 def _column_index_by_header(header: tuple[Any, ...], needle: str) -> int | None:
     for idx, cell in enumerate(header):
         if needle in _normalize_header_cell(cell):
@@ -498,6 +565,8 @@ def _parse_compact_row(
             descricao=descricao,
             cidade="",
             maps_url=maps_url,
+            image_url=_image_url_from_row(row, header),
+            valor=_valor_from_row(row, header),
         )
     except (TypeError, ValueError, IndexError):
         return None
@@ -519,6 +588,8 @@ def _write_full_inventory_sheet(ws: Worksheet, items: list[Attraction]) -> None:
         ws.cell(r, 10, item.descricao)
         ws.cell(r, 11, item.cidade)
         ws.cell(r, 12, item.maps_url or None)
+        ws.cell(r, 13, item.image_url or None)
+        ws.cell(r, 14, item.valor or None)
 
 
 def _external_inventory_model_path() -> Path:
@@ -594,7 +665,7 @@ def create_inventory_template(path: Path | None = None) -> Path:
         ws.cell(row, 8).fill = score_fill
         ws.cell(row, 9).fill = score_fill
 
-    widths = [10, 34, 22, 14, 14, 16, 14, 14, 16, 48, 18, 42]
+    widths = [10, 34, 22, 14, 14, 16, 14, 14, 16, 48, 18, 42, 42, 16]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
 
@@ -602,7 +673,7 @@ def create_inventory_template(path: Path | None = None) -> Path:
 
     table = Table(
         displayName="InventarioTuristico",
-        ref=f"A1:L{last_row}",
+        ref=f"A1:N{last_row}",
     )
     table.tableStyleInfo = TableStyleInfo(
         name="TableStyleMedium2",
@@ -638,7 +709,9 @@ def create_inventory_template(path: Path | None = None) -> Path:
     help_ws["A4"] = "Horários: HH:MM. Peso Plog e Peso Cohen: escolha na lista (1 a 5)."
     help_ws["A5"] = "Coluna Cidade (K): Botucatu, Pardinho ou Bofete (ex.: Pardinho - SP)."
     help_ws["A6"] = "Coluna Maps (L): link do Google Maps (compartilhar → copiar link)."
-    help_ws["A7"] = "Capacidade = número máximo de pessoas do grupo na atração."
+    help_ws["A7"] = "Coluna Imagem (M): link direto da foto do atrativo (https://...). Entra no PDF no lugar do mini mapa."
+    help_ws["A8"] = "Coluna Ingresso (N): valor do atrativo (ex.: R$ 80,00). Se ficar vazia, o roteiro não mostra valor."
+    help_ws["A9"] = "Capacidade = número máximo de pessoas do grupo na atração."
 
     wb.save(target)
     return target
@@ -692,6 +765,8 @@ def _parse_inventory_row(
                 descricao=str(row[desc_idx] or "").strip() if len(row) > desc_idx else "",
                 cidade=cidade,
                 maps_url=maps_url,
+                image_url=_image_url_from_row(row, header),
+                valor=_valor_from_row(row, header),
             )
         return Attraction(
             id=str(row[0]).strip(),
@@ -706,6 +781,8 @@ def _parse_inventory_row(
             descricao=str(row[7] or "").strip(),
             cidade="",
             maps_url=maps_url,
+            image_url=_image_url_from_row(row, header),
+            valor=_valor_from_row(row, header),
         )
     except (TypeError, ValueError, IndexError):
         return None

@@ -220,6 +220,7 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
         thumb = attraction_thumbnail_flowable(
             maps_url=block.maps_url,
             place_title=block.title,
+            image_url=block.image_url,
         )
         if thumb:
             time_cell.append(Spacer(1, 0.06 * cm))
