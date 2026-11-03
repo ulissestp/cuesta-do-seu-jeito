@@ -1,6 +1,6 @@
 # CUESTA DO SEU JEITO — Roteiros Turísticos (RT)
 
-**Versão 1.0 Beta** · Gerador de roteiros personalizados com base no perfil do grupo (Plog / Cohen), inventário em Excel e exportação em PDF.
+**Versão 1.1** · Gerador de roteiros personalizados com base no perfil do grupo (Plog / Cohen), inventário em Excel e exportação em PDF.
 
 Aplicativo **desktop para Windows** (recomendado). Versão web opcional via Streamlit. **Não utiliza IA** — a lógica é determinística e auditável.
 
@@ -11,7 +11,7 @@ Aplicativo **desktop para Windows** (recomendado). Versão web opcional via Stre
 | Documento | Público | Conteúdo |
 |-----------|---------|----------|
 | [Manual do usuário](docs/MANUAL_DO_USUARIO.md) | Operadores, guias, equipe comercial | Instalação, abas do programa, planilha, PDFs, dicas |
-| [Manual em PDF](docs/Manual_CUESTA_RT_v1.0_Beta.pdf) | Operadores | Texto do manual + **espaços reservados** para colar capturas de tela |
+| [Manual em PDF](docs/Manual_CUESTA_RT_v1.1.pdf) | Operadores | Texto do manual com capturas de tela |
 | [Documentação técnica](docs/DOCUMENTACAO_TECNICA.md) | Desenvolvedores | Arquitetura, módulos, motor de roteiro, build |
 
 ---
@@ -42,7 +42,7 @@ Feche o programa antes de compilar.
 powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
 ```
 
-Saída: `dist\RoteiroTurismo.exe` (logo e versão **1.0 Beta** embutidos).
+Saída: `dist\RoteiroTurismo.exe` (logo e versão **1.1** embutidos).
 
 ### Streamlit (opcional)
 

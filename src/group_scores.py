@@ -39,15 +39,32 @@ def _perfil_psicografico_label(plog: float, cohen: float) -> str:
     return f"perfil Plog {p} / Cohen {c}"
 
 
-def build_technical_analysis(scores: GroupScores, selected_weights: list[tuple[float, float]]) -> str:
+def build_technical_analysis(
+    scores: GroupScores,
+    selected_weights: list[tuple[float, float]],
+    *,
+    fora_do_perfil: bool = False,
+    atrativos_fora: list[str] | None = None,
+) -> str:
     weights_txt = ", ".join(f"{p:.1f}/{c:.1f}" for p, c in selected_weights[:6])
     label = _perfil_psicografico_label(scores.media_plog, scores.media_cohen)
+    if fora_do_perfil:
+        nomes = ", ".join(atrativos_fora or []) or "atrativos mais próximos da média"
+        abertura = (
+            "O roteiro está fora do perfil. Não havia atrativos suficientes dentro da margem ±1 "
+            f"da Média Plog ({scores.media_plog:.2f}) e da Média Cohen ({scores.media_cohen:.2f}). "
+            f"Foram incluídos os mais próximos da média: {nomes}. "
+        )
+    else:
+        abertura = (
+            f"O roteiro gerado atende ao nível psicográfico de aventura e independência do grupo ({label}). "
+            f"As atrações selecionadas respeitam margem ±1 em relação à Média Plog ({scores.media_plog:.2f}) "
+            f"e Média Cohen ({scores.media_cohen:.2f}). "
+        )
     return (
-        f"O roteiro gerado atende ao nível psicográfico de aventura e independência do grupo ({label}). "
-        f"As atrações selecionadas respeitam margem ±1 em relação à Média Plog ({scores.media_plog:.2f}) "
-        f"e Média Cohen ({scores.media_cohen:.2f}), considerando o fator restritivo "
-        f"\"{scores.fator_restritivo}\" (tamanho do grupo). "
+        f"{abertura}"
+        f"O fator restritivo considerado foi \"{scores.fator_restritivo}\" (tamanho do grupo). "
         f"Pesos Plog/Cohen das atrações: {weights_txt or 'n/d'}. "
-        "A logística respeita almoço entre 12h00 e 13h30 (1h30), deslocamentos de 30 minutos "
+        "A logística respeita almoço entre 12h00 e 13h30 (1h30), deslocamentos de até 40 minutos "
         "e encerramento diário até 18h00."
     )

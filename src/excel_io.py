@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +157,8 @@ class TouristProfile:
     cidades: list[str]
     plog_scores: dict[str, int]
     cohen_scores: dict[str, int]
+    check_in: date | None = None
+    check_out: date | None = None
 
     @property
     def media_plog(self) -> float:
@@ -185,6 +187,11 @@ class Attraction:
     maps_url: str = ""
     image_url: str = ""
     valor: str = ""
+    horarios: dict[str, tuple[time | None, time | None]] | None = None
+
+    def __post_init__(self) -> None:
+        if self.horarios is None:
+            self.horarios = {}
 
     @property
     def horario_funcionamento(self) -> str:
@@ -255,7 +262,23 @@ def empty_tourist_profile() -> TouristProfile:
         cidades=[],
         plog_scores={q.id: 0 for q in PLOG_QUESTIONS},
         cohen_scores={q.id: 0 for q in COHEN_QUESTIONS},
+        check_in=None,
+        check_out=None,
     )
+
+
+def sync_trip_duration(profile: TouristProfile) -> None:
+    """Duração em dias = check-out inclusive."""
+    if profile.check_in and profile.check_out and profile.check_out >= profile.check_in:
+        profile.duracao_dias = (profile.check_out - profile.check_in).days + 1
+
+
+def trip_dates(profile: TouristProfile) -> list[date]:
+    sync_trip_duration(profile)
+    if not profile.check_in or not profile.check_out or profile.check_out < profile.check_in:
+        return []
+    span = (profile.check_out - profile.check_in).days
+    return [profile.check_in + timedelta(days=offset) for offset in range(span + 1)]
 
 
 def validate_profile_for_roteiro(profile: TouristProfile) -> list[str]:
@@ -267,8 +290,15 @@ def validate_profile_for_roteiro(profile: TouristProfile) -> list[str]:
         missing.append("Nome do grupo / contato")
     if profile.numero_pessoas < 1:
         missing.append("Número de pessoas")
-    if profile.duracao_dias < 1:
-        missing.append("Duração da viagem (dias)")
+    sync_trip_duration(profile)
+    if not profile.check_in or not profile.check_out:
+        missing.append("Check-in e check-out")
+    elif profile.check_out < profile.check_in:
+        missing.append("Check-out deve ser na data do check-in ou depois")
+    elif profile.duracao_dias > 21:
+        missing.append("Período máximo de 21 dias entre check-in e check-out")
+    elif profile.duracao_dias < 1:
+        missing.append("Check-in e check-out")
     if is_form_blank(profile.perfil_predominante):
         missing.append("Perfil predominante")
     if is_form_blank(profile.ritmo):
@@ -319,6 +349,22 @@ def clear_profile_only(workbook_path: Path) -> Path:
     return workbook_path
 
 
+def parse_date_value(value: Any) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _cell_score_int(value: Any) -> int:
     if value is None or value == "":
         return 0
@@ -355,13 +401,20 @@ def _read_profile_sheet(ws: Worksheet) -> TouristProfile:
         cidades=parse_cidades_selecionadas(ws["B9"].value),
         plog_scores=plog,
         cohen_scores=cohen,
+        check_in=parse_date_value(ws["B10"].value),
+        check_out=parse_date_value(ws["D10"].value),
     )
 
 
 def write_profile_to_sheet(ws: Worksheet, profile: TouristProfile) -> None:
+    sync_trip_duration(profile)
     ws["B4"] = profile.nome_grupo or None
     ws["B5"] = profile.numero_pessoas or None
     ws["B6"] = profile.duracao_dias or None
+    ws["A10"] = "Check-in"
+    ws["B10"] = profile.check_in
+    ws["C10"] = "Check-out"
+    ws["D10"] = profile.check_out
     ws["B7"] = profile.perfil_predominante or None
     ws["B8"] = profile.ritmo or None
     ws["B9"] = serialize_cidades_selecionadas(profile.cidades) or None
@@ -398,7 +451,23 @@ def inventory_template_path(project_root: Path | None = None) -> Path:
 
 
 def _normalize_header_cell(value: Any) -> str:
-    return str(value or "").strip().lower().replace("ç", "c").replace("ã", "a")
+    text = str(value or "").strip().lower()
+    for src, dst in (
+        ("á", "a"),
+        ("à", "a"),
+        ("â", "a"),
+        ("ã", "a"),
+        ("é", "e"),
+        ("ê", "e"),
+        ("í", "i"),
+        ("ó", "o"),
+        ("ô", "o"),
+        ("õ", "o"),
+        ("ú", "u"),
+        ("ç", "c"),
+    ):
+        text = text.replace(src, dst)
+    return text
 
 
 def _inventory_format(header: tuple[Any, ...]) -> str:
@@ -489,6 +558,101 @@ def _valor_column_index(header: tuple[Any, ...] | None) -> int | None:
     return None
 
 
+_WEEKDAY_KEYS = (
+    "segunda",
+    "terca",
+    "quarta",
+    "quinta",
+    "sexta",
+    "sabado",
+    "domingo",
+    "feriado",
+)
+
+
+def _weekly_hour_columns(header: tuple[Any, ...]) -> dict[str, tuple[int, int]]:
+    found: dict[str, tuple[int, int]] = {}
+    for idx, cell in enumerate(header):
+        label = _normalize_header_cell(cell)
+        for key in _WEEKDAY_KEYS:
+            if label == key or label.startswith(key):
+                found[key] = (idx, idx + 1)
+    return found
+
+
+def _inventory_has_weekly_hours(header: tuple[Any, ...]) -> bool:
+    return "segunda" in _weekly_hour_columns(header)
+
+
+def _is_hour_subheader(row: tuple[Any, ...]) -> bool:
+    if row and row[0] and str(row[0]).strip():
+        return False
+    labels = " ".join(_normalize_header_cell(cell) for cell in row if cell)
+    return "abertura" in labels and "fechamento" in labels
+
+
+def _row_cell(row: tuple[Any, ...], idx: int | None) -> Any:
+    if idx is None or idx >= len(row):
+        return None
+    return row[idx]
+
+
+def _parse_float_cell(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(str(value).strip().replace(",", "."))
+
+
+def _parse_weekly_row(row: tuple[Any, ...], header: tuple[Any, ...]) -> Attraction | None:
+    if not row or not row[0] or str(row[0]).strip().upper() == "ID":
+        return None
+    if _is_hour_subheader(row):
+        return None
+    try:
+        columns = _weekly_hour_columns(header)
+        horarios: dict[str, tuple[time | None, time | None]] = {}
+        for key, (open_idx, close_idx) in columns.items():
+            horarios[key] = (
+                parse_time_value(_row_cell(row, open_idx)),
+                parse_time_value(_row_cell(row, close_idx)),
+            )
+        segunda = horarios.get("segunda", (None, None))
+        maps_url = ""
+        if _full_inventory_has_maps_column(header):
+            maps_idx = _column_index_by_header(header, "maps")
+            if maps_idx is not None:
+                maps_url = clean_maps_url(_row_cell(row, maps_idx))
+        nome_idx = _column_index_starting(header, "nome")
+        categoria_idx = _column_index_starting(header, "categoria")
+        cap_idx = _column_index_starting(header, "capacidade")
+        tempo_idx = _column_index_starting(header, "tempo")
+        plog_idx = _column_index_by_header(header, "plog")
+        cohen_idx = _column_index_by_header(header, "cohen")
+        desc_idx = _column_index_by_header(header, "descri")
+        city_idx = _column_index_starting(header, "cidade")
+        return Attraction(
+            id=str(row[0]).strip(),
+            nome=str(_row_cell(row, nome_idx) or "").strip(),
+            categoria=str(_row_cell(row, categoria_idx) or "").strip(),
+            horario_abertura=segunda[0],
+            horario_fechamento=segunda[1],
+            capacidade=int(_parse_float_cell(_row_cell(row, cap_idx))),
+            tempo_horas=_parse_float_cell(_row_cell(row, tempo_idx)),
+            peso_plog=_parse_float_cell(_row_cell(row, plog_idx)),
+            peso_cohen=_parse_float_cell(_row_cell(row, cohen_idx)),
+            descricao=str(_row_cell(row, desc_idx) or "").strip(),
+            cidade=str(_row_cell(row, city_idx) or "").strip(),
+            maps_url=maps_url,
+            image_url=_image_url_from_row(row, header),
+            valor=_valor_from_row(row, header),
+            horarios=horarios,
+        )
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 def _valor_from_row(row: tuple[Any, ...], header: tuple[Any, ...] | None) -> str:
     valor_idx = _valor_column_index(header)
     if valor_idx is None or len(row) <= valor_idx:
@@ -513,6 +677,14 @@ def _image_url_from_row(row: tuple[Any, ...], header: tuple[Any, ...] | None) ->
 def _column_index_by_header(header: tuple[Any, ...], needle: str) -> int | None:
     for idx, cell in enumerate(header):
         if needle in _normalize_header_cell(cell):
+            return idx
+    return None
+
+
+def _column_index_starting(header: tuple[Any, ...], needle: str) -> int | None:
+    for idx, cell in enumerate(header):
+        label = _normalize_header_cell(cell)
+        if label == needle or label.startswith(needle + " ") or label.startswith(needle + "("):
             return idx
     return None
 
@@ -572,24 +744,60 @@ def _parse_compact_row(
         return None
 
 
+def _hours_to_store(item: Attraction) -> dict[str, tuple[time | None, time | None]]:
+    stored = dict(item.horarios or {})
+    if stored:
+        return stored
+    slot = (item.horario_abertura, item.horario_fechamento)
+    if slot[0] is None and slot[1] is None:
+        return {}
+    return {key: slot for key in _WEEKDAY_KEYS}
+
+
 def _write_full_inventory_sheet(ws: Worksheet, items: list[Attraction]) -> None:
-    for col, header in enumerate(FULL_INVENTORY_HEADERS, start=1):
+    base_headers = (
+        "ID",
+        "Nome da Atração",
+        "Categoria",
+        "Capacidade Máx. Grupo (Pessoas)",
+        "Tempo Médio (horas)",
+        "Peso Plog (Aventura)",
+        "Peso Cohen (Independência)",
+        "Descrição Breve",
+        "Cidade",
+        "Maps",
+        "Imagem",
+        "Ingresso",
+    )
+    day_labels = ("Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo", "Feriado")
+    for col, header in enumerate(base_headers, start=1):
         ws.cell(1, col, header)
-    for r, item in enumerate(items, start=2):
+    col = len(base_headers) + 1
+    for label in day_labels:
+        ws.cell(1, col, label)
+        ws.cell(2, col, "Horário de Abertura")
+        ws.cell(2, col + 1, "Horário de Fechamento")
+        col += 2
+    for r, item in enumerate(items, start=3):
+        hours = _hours_to_store(item)
         ws.cell(r, 1, item.id)
         ws.cell(r, 2, item.nome)
         ws.cell(r, 3, item.categoria)
-        ws.cell(r, 4, item.horario_abertura)
-        ws.cell(r, 5, item.horario_fechamento)
-        ws.cell(r, 6, item.capacidade)
-        ws.cell(r, 7, item.tempo_horas)
-        ws.cell(r, 8, item.peso_plog)
-        ws.cell(r, 9, item.peso_cohen)
-        ws.cell(r, 10, item.descricao)
-        ws.cell(r, 11, item.cidade)
-        ws.cell(r, 12, item.maps_url or None)
-        ws.cell(r, 13, item.image_url or None)
-        ws.cell(r, 14, item.valor or None)
+        ws.cell(r, 4, item.capacidade)
+        ws.cell(r, 5, item.tempo_horas)
+        ws.cell(r, 6, item.peso_plog)
+        ws.cell(r, 7, item.peso_cohen)
+        ws.cell(r, 8, item.descricao)
+        ws.cell(r, 9, item.cidade)
+        ws.cell(r, 10, item.maps_url or None)
+        ws.cell(r, 11, item.image_url or None)
+        ws.cell(r, 12, item.valor or None)
+        col = 13
+        for key in _WEEKDAY_KEYS:
+            abertura, fechamento = hours.get(key, (None, None))
+            ws.cell(r, col, abertura)
+            ws.cell(r, col + 1, fechamento)
+            col += 2
 
 
 def _external_inventory_model_path() -> Path:
@@ -807,13 +1015,11 @@ def inventory_maps_coverage(workbook_path: Path) -> tuple[int, int]:
     return with_maps, len(items)
 
 
-def read_inventory(workbook_path: Path) -> list[Attraction]:
-    wb = load_workbook(workbook_path, data_only=True)
-    ws = wb[INVENTORY_SHEET]
-    rows = list(ws.iter_rows(values_only=True))
+def _attractions_from_rows(rows: list[tuple[Any, ...]]) -> list[Attraction]:
     if not rows:
         return []
     header = rows[0]
+    weekly = _inventory_has_weekly_hours(header)
     fmt = _inventory_format(header)
     has_veg = _full_inventory_has_veg_column(header)
     has_city = _full_inventory_has_city_column(header)
@@ -821,7 +1027,9 @@ def read_inventory(workbook_path: Path) -> list[Attraction]:
     items: list[Attraction] = []
     for row in rows[1:]:
         parsed: Attraction | None = None
-        if fmt == "compact":
+        if weekly:
+            parsed = _parse_weekly_row(row, header)
+        elif fmt == "compact":
             parsed = _parse_compact_row(row, header)
         elif fmt == "full_hours":
             parsed = _parse_inventory_row(
@@ -839,41 +1047,19 @@ def read_inventory(workbook_path: Path) -> list[Attraction]:
         if parsed:
             items.append(parsed)
     return items
+
+
+def read_inventory(workbook_path: Path) -> list[Attraction]:
+    wb = load_workbook(workbook_path, data_only=True)
+    ws = wb[INVENTORY_SHEET]
+    return _attractions_from_rows(list(ws.iter_rows(values_only=True)))
 
 
 def read_inventory_from_uploaded(uploaded_path: Path) -> list[Attraction]:
     wb = load_workbook(uploaded_path, data_only=True)
     sheet = INVENTORY_SHEET if INVENTORY_SHEET in wb.sheetnames else wb.sheetnames[0]
     ws = wb[sheet]
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        return []
-    header = rows[0]
-    fmt = _inventory_format(header)
-    has_veg = _full_inventory_has_veg_column(header)
-    has_city = _full_inventory_has_city_column(header)
-    has_maps = _full_inventory_has_maps_column(header)
-    items: list[Attraction] = []
-    for row in rows[1:]:
-        parsed: Attraction | None = None
-        if fmt == "compact":
-            parsed = _parse_compact_row(row, header)
-        elif fmt == "full_hours":
-            parsed = _parse_inventory_row(
-                row,
-                with_hours=True,
-                has_veg_column=has_veg,
-                has_city_column=has_city,
-                has_maps_column=has_maps,
-                header=header,
-            )
-        elif fmt == "full_legacy":
-            parsed = _parse_inventory_row(
-                row, with_hours=False, has_maps_column=has_maps, header=header
-            )
-        if parsed:
-            items.append(parsed)
-    return items
+    return _attractions_from_rows(list(ws.iter_rows(values_only=True)))
 
 
 def import_inventory_sheet(workbook_path: Path, uploaded_path: Path) -> int:

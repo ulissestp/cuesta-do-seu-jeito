@@ -1,6 +1,6 @@
 # Manual do usuário — CUESTA DO SEU JEITO · RT
 
-**Versão do programa:** 1.0 Beta  
+**Versão do programa:** 1.1  
 **Produto:** gerador de roteiros turísticos personalizados (sem inteligência artificial).
 
 ---
@@ -24,7 +24,7 @@ Tudo fica gravado numa **planilha Excel de sessão** (`Projeto_Integrador_*.xlsx
 
 1. Use `dist\RoteiroTurismo.exe`.
 2. Na primeira execução, o programa cria uma planilha de sessão em `output\` (mesma pasta do `.exe`, se você copiou só o executável).
-3. Ícone e versão **1.0 Beta** aparecem na janela e nas propriedades do arquivo no Windows.
+3. Ícone e versão **1.1** aparecem na janela e nas propriedades do arquivo no Windows.
 
 ### Opção B — Python (equipe técnica)
 
@@ -62,9 +62,9 @@ Preencha:
 
 - Nome do grupo / contato  
 - Número de pessoas  
-- Duração da viagem (dias)  
-- Perfil predominante (Casais, Famílias, etc.)  
-- Ritmo de viagem (Relaxado, Moderado, Intenso)
+- Check-in e check-out no calendário (os dois dias entram no roteiro; a duração é calculada, até 21 dias)  
+- Perfil predominante (Casais, Famílias, etc.) — aparece no PDF e não entra no cálculo  
+- Ritmo de viagem (Relaxado 2 visitas/dia, Moderado 4, Intenso 6; o almoço não conta)
 
 ### 4.2 Cidades do roteiro
 
@@ -99,7 +99,7 @@ Esses valores orientam quais atrativos são elegíveis e aparecem no PDF.
 
 1. **Importar inventário (.xlsx)** — escolha um arquivo com aba de inventário (modelo em `data\Modelo_Inventario_Turistico.xlsx`).
 2. Os dados são copiados para a planilha de sessão.
-3. A tabela na tela lista ID, nome, horários, capacidade, Plog, Cohen.
+3. A tabela na tela lista **Novo ID**, **ID**, **nome da atração**, **categoria** e **descrição breve**.
 
 ### Colunas importantes (modelo completo)
 
@@ -108,7 +108,7 @@ Esses valores orientam quais atrativos são elegíveis e aparecem no PDF.
 | ID | Identificador único |
 | Nome da Atração | Título no roteiro |
 | Categoria | Tema do dia (parcial) |
-| Horário de Abertura / Fechamento | Respeitados na programação |
+| Horários de segunda a domingo e feriado | O roteiro só usa o atrativo se estiver aberto naquele dia |
 | Tempo Médio (horas) | Duração da visita |
 | Peso Plog / Cohen | Compatibilidade com o grupo |
 | Descrição Breve | Texto no PDF |
@@ -116,6 +116,13 @@ Esses valores orientam quais atrativos são elegíveis e aparecem no PDF.
 | **Maps** | Link Google Maps (recomendado) |
 
 **Salvar modelo de inventário** exporta um arquivo vazio para você preencher.
+
+### Trocar um destino (Novo ID)
+
+1. Gere o roteiro na aba 3.
+2. Volte à aba 2. As linhas amarelas são os IDs usados.
+3. Clique em **Novo ID** e escolha outro destino na lista.
+4. Gere o PDF de novo. O roteiro usa essa seleção, com o ID novo no lugar do antigo.
 
 ### Links do Google Maps
 
@@ -141,22 +148,23 @@ Nome típico: `Roteiro_NomeDoGrupo_HHMM.pdf`.
 
 ### Conteúdo do PDF do roteiro
 
-- Capa com logo, versão **1.0 Beta**, cliente e duração  
+- Capa com logo, versão **1.1**, cliente e período  
 - Quadro-resumo do perfil e índices  
-- **Linha do tempo por dia** — visitas, deslocamentos (km e minutos), almoço, encerramento  
-- Miniatura de **mapa** por bloco (Google Static Maps se houver chave API; senão OpenStreetMap)  
+- **Linha do tempo por dia** — visitas com foto, deslocamentos (km e minutos), almoço, encerramento  
+- Valor do ingresso, quando a planilha tiver esse campo  
 - Sugestões de **hospedagem** (não entram na grade horária)  
-- Análise técnica (Plog, Cohen, fator restritivo)
+- Análise técnica (médias do grupo e fator restritivo)
 
 ### Regras de horário (resumo)
 
 | Regra | Valor |
 |-------|--------|
-| Primeira visita do dia | Início **até 9h30** (atractivo deve abrir até esse horário) |
-| Almoço | Janela a partir de **12h00**, duração **1h30** |
+| Primeira visita do dia | Começa de manhã, de preferência às **9h30** |
+| Almoço | A partir de **12h00**, duração **1h30** |
 | Fim das atividades | Até **18h00** |
-| Deslocamento | Calculado pela **distância** entre coordenadas dos links Maps (~45 km/h + margem) |
-| Visitas por dia | Depende do ritmo: Relaxado 2 · Moderado 4 · Intenso 6 (almoço não conta) |
+| Deslocamento | No máximo **40 minutos**; se passar, entra outro atrativo mais perto |
+| Visitas por dia | Relaxado 2 · Moderado 4 · Intenso 6 (almoço não conta) |
+| Dias | Sábado, domingo e feriado usam as colunas correspondentes da planilha |
 
 A ordem das visitas no dia considera proximidade geográfica e compatibilidade de scores.
 
@@ -212,6 +220,6 @@ Para mapas estáticos do Google (melhor qualidade):
 
 ## 11. Contato e evolução
 
-Versão atual: **1.0 Beta**. Novas versões alteram principalmente `APP_VERSION` em `src/branding.py` e o instalador desktop.
+Versão atual: **1.1**. Novas versões alteram `APP_VERSION` em `src/branding.py` e os metadados do executável.
 
 Para dúvidas sobre regras de negócio (Plog/Cohen, cidades, capacidade), alinhe com a equipe pedagógica / produto do projeto integrador.

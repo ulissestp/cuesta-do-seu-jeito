@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import streamlit as st
@@ -93,11 +93,19 @@ def step_profile() -> None:
             max_value=500,
             value=max(0, int(current.numero_pessoas)),
         )
-        duracao = c1.number_input(
-            "Duração da Viagem (dias)",
-            min_value=0,
-            max_value=30,
-            value=max(0, int(current.duracao_dias)),
+        check_in = c1.date_input(
+            "Check-in",
+            value=current.check_in or date.today(),
+            format="DD/MM/YYYY",
+        )
+        check_out = c2.date_input(
+            "Check-out",
+            value=current.check_out or current.check_in or date.today(),
+            format="DD/MM/YYYY",
+        )
+        st.caption(
+            "O roteiro inclui os dois dias e usa só atrativos em funcionamento "
+            "(segunda a domingo ou feriado)."
         )
         perfil = c2.selectbox(
             "Perfil predominante",
@@ -154,7 +162,9 @@ def step_profile() -> None:
         profile = TouristProfile(
             nome_grupo=nome.strip(),
             numero_pessoas=int(pessoas),
-            duracao_dias=int(duracao),
+            duracao_dias=0,
+            check_in=check_in,
+            check_out=check_out,
             perfil_predominante=normalize_form_choice(perfil),
             ritmo=normalize_form_choice(ritmo),
             cidades=list(cidades),
@@ -199,16 +209,9 @@ def step_inventory() -> None:
             [
                 {
                     "ID": a.id,
-                    "Nome": a.nome,
+                    "Nome da atração": a.nome,
                     "Categoria": a.categoria,
-                    "Abertura": a.horario_abertura.strftime("%H:%M") if a.horario_abertura else "—",
-                    "Fechamento": a.horario_fechamento.strftime("%H:%M") if a.horario_fechamento else "—",
-                    "Capacidade": a.capacidade,
-                    "Tempo (h)": a.tempo_horas,
-                    "Plog": a.peso_plog,
-                    "Cohen": a.peso_cohen,
-                    "Cidade": a.cidade,
-                    "Descrição": a.descricao,
+                    "Descrição breve": a.descricao,
                 }
                 for a in items
             ],

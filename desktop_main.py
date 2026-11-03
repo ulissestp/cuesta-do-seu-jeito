@@ -10,7 +10,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -30,6 +30,7 @@ from src.excel_io import (
     inventory_template_path,
     initialize_session_workbook,
     clear_profile_only,
+    filter_inventory_by_cities,
     import_inventory_sheet,
     inventory_maps_coverage,
     read_inventory,
@@ -89,6 +90,147 @@ def _score_display(value: int) -> str:
     return str(value) if value in range(1, 6) else FORM_BLANK
 
 
+_MONTHS_PT = (
+    "janeiro",
+    "fevereiro",
+    "março",
+    "abril",
+    "maio",
+    "junho",
+    "julho",
+    "agosto",
+    "setembro",
+    "outubro",
+    "novembro",
+    "dezembro",
+)
+_WEEK_LETTERS = ("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
+
+
+class TripCalendar(ctk.CTkFrame):
+    """Calendário de check-in e check-out na aba de perfil."""
+
+    def __init__(self, master) -> None:
+        super().__init__(master)
+        self.check_in: date | None = None
+        self.check_out: date | None = None
+        today = date.today()
+        self._visible = date(today.year, today.month, 1)
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=8, pady=(8, 4))
+        ctk.CTkButton(header, text="◀", width=36, command=self._prev_month).pack(side="left")
+        self._title = ctk.CTkLabel(header, text="", font=ctk.CTkFont(weight="bold"))
+        self._title.pack(side="left", expand=True)
+        ctk.CTkButton(header, text="▶", width=36, command=self._next_month).pack(side="right")
+
+        self._grid = ctk.CTkFrame(self, fg_color="transparent")
+        self._grid.pack(padx=8, pady=(0, 4))
+        for col, letter in enumerate(_WEEK_LETTERS):
+            ctk.CTkLabel(self._grid, text=letter, width=44, font=ctk.CTkFont(size=11)).grid(
+                row=0, column=col, padx=1, pady=2
+            )
+
+        self._summary = ctk.CTkLabel(self, text="", anchor="w", justify="left")
+        self._summary.pack(fill="x", padx=8, pady=(0, 8))
+        self._redraw()
+
+    def set_dates(self, check_in: date | None, check_out: date | None) -> None:
+        self.check_in = check_in
+        self.check_out = check_out
+        anchor = check_in or date.today()
+        self._visible = date(anchor.year, anchor.month, 1)
+        self._redraw()
+
+    def clear(self) -> None:
+        self.set_dates(None, None)
+
+    def _prev_month(self) -> None:
+        self._shift_month(-1)
+
+    def _next_month(self) -> None:
+        self._shift_month(1)
+
+    def _shift_month(self, delta: int) -> None:
+        month = self._visible.month + delta
+        year = self._visible.year
+        while month < 1:
+            month += 12
+            year -= 1
+        while month > 12:
+            month -= 12
+            year += 1
+        self._visible = date(year, month, 1)
+        self._redraw()
+
+    def _pick(self, chosen: date) -> None:
+        if self.check_in is None or (self.check_in and self.check_out):
+            self.check_in = chosen
+            self.check_out = None
+        elif chosen < self.check_in:
+            self.check_out = self.check_in
+            self.check_in = chosen
+        else:
+            self.check_out = chosen
+        self._redraw()
+
+    def _redraw(self) -> None:
+        for child in self._grid.winfo_children():
+            info = child.grid_info()
+            if int(info.get("row", 0)) > 0:
+                child.destroy()
+        self._title.configure(text=f"{_MONTHS_PT[self._visible.month - 1]} {self._visible.year}")
+        first = self._visible
+        start = first - timedelta(days=first.weekday())
+        for cell in range(42):
+            current = start + timedelta(days=cell)
+            row, col = divmod(cell, 7)
+            in_month = current.month == self._visible.month
+            selected = current in (self.check_in, self.check_out)
+            in_range = (
+                self.check_in is not None
+                and self.check_out is not None
+                and self.check_in < current < self.check_out
+            )
+            if selected:
+                color = "#2B6CB0"
+                text_color = "white"
+            elif in_range:
+                color = "#BEE3F8"
+                text_color = "#1A365D"
+            elif in_month:
+                color = "#E2E8F0"
+                text_color = "#1A202C"
+            else:
+                color = "#EDF2F7"
+                text_color = "#A0AEC0"
+            ctk.CTkButton(
+                self._grid,
+                text=str(current.day),
+                width=44,
+                height=28,
+                fg_color=color,
+                text_color=text_color,
+                hover_color="#3182CE",
+                command=lambda chosen=current: self._pick(chosen),
+            ).grid(row=row + 1, column=col, padx=1, pady=1)
+        if self.check_in and self.check_out:
+            days = (self.check_out - self.check_in).days + 1
+            self._summary.configure(
+                text=(
+                    f"Check-in: {self.check_in.strftime('%d/%m/%Y')}    "
+                    f"Check-out: {self.check_out.strftime('%d/%m/%Y')}    "
+                    f"{days} dia(s)"
+                )
+            )
+        elif self.check_in:
+            self._summary.configure(
+                text=f"Check-in: {self.check_in.strftime('%d/%m/%Y')}    Clique a data de check-out."
+            )
+        else:
+            self._summary.configure(text="Clique a data de check-in e depois a de check-out.")
+
+
 class RoteiroDesktopApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
@@ -115,6 +257,10 @@ class RoteiroDesktopApp(ctk.CTk):
         self.last_anamnese_pdf: Path | None = None
         self._pdf_job_running = False
         self.itinerary_result = None
+        self._used_order: list[str] = []
+        self._novo_ids: dict[str, str] = {}
+        self._edit_entry: tk.Widget | None = None
+        self._edit_row: str | None = None
 
         self.plog_combos: dict[str, ctk.CTkComboBox] = {}
         self.cohen_combos: dict[str, ctk.CTkComboBox] = {}
@@ -177,20 +323,34 @@ class RoteiroDesktopApp(ctk.CTk):
 
         self.nome_var = tk.StringVar()
         self.pessoas_var = tk.StringVar(value="")
-        self.duracao_var = tk.StringVar(value="")
 
         self._labeled_entry(grid, 0, "Nome do grupo / contato", self.nome_var)
         self._labeled_entry(grid, 0, "Número de pessoas", self.pessoas_var, col=2)
-        self._labeled_entry(grid, 1, "Duração (dias)", self.duracao_var)
-        self.perfil_combo = self._labeled_combo(grid, 1, "Perfil predominante", PERFIL_FORM_OPCOES, col=2)
-        self.ritmo_combo = self._labeled_combo(grid, 2, "Ritmo de viagem", RITMO_FORM_OPCOES)
+        self.perfil_combo = self._labeled_combo(grid, 1, "Perfil predominante", PERFIL_FORM_OPCOES)
+        self.ritmo_combo = self._labeled_combo(grid, 1, "Ritmo de viagem", RITMO_FORM_OPCOES, col=2)
+
+        ctk.CTkLabel(scroll, text="Período da viagem", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", pady=(12, 4)
+        )
+        ctk.CTkLabel(
+            scroll,
+            text=(
+                "Escolha o check-in e o check-out. O roteiro usa só atrativos em funcionamento "
+                "naquele dia (segunda a domingo ou feriado)."
+            ),
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            wraplength=900,
+        ).pack(anchor="w", pady=(0, 6))
+        self.trip_calendar = TripCalendar(scroll)
+        self.trip_calendar.pack(anchor="w", pady=(0, 8))
 
         ctk.CTkLabel(scroll, text="Cidades do roteiro", font=ctk.CTkFont(weight="bold")).pack(
             anchor="w", pady=(12, 4)
         )
         ctk.CTkLabel(
             scroll,
-            text="Selecione uma ou mais cidades. O roteiro usará apenas atrações dessas cidades (coluna K do inventário).",
+            text="Selecione uma ou mais cidades. O roteiro usará apenas atrações dessas cidades (coluna Cidade do inventário).",
             font=ctk.CTkFont(size=12),
             text_color="gray",
             wraplength=900,
@@ -303,24 +463,51 @@ class RoteiroDesktopApp(ctk.CTk):
         self.inv_count_label = ctk.CTkLabel(top, text="")
         self.inv_count_label.pack(side="left", padx=12)
 
+        ctk.CTkLabel(
+            parent,
+            text=(
+                "Depois de gerar o roteiro, as linhas amarelas são os IDs usados. "
+                "Clique em Novo ID e escolha outro destino na lista. Depois gere o PDF de novo."
+            ),
+            wraplength=980,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 4))
+
         table_frame = ctk.CTkFrame(parent)
         table_frame.pack(fill="both", expand=True, pady=8)
 
-        cols = ("id", "nome", "cidade", "abertura", "fechamento", "cap", "plog", "cohen")
+        cols = ("novo_id", "id", "nome", "categoria", "descricao")
+        style = ttk.Style(self)
+
+        def _tag_friendly(option: str) -> list:
+            try:
+                mapped = style.map("Treeview", query_opt=option)
+            except tk.TclError:
+                return []
+            return [item for item in mapped if item[:2] != ("!disabled", "!selected")]
+
+        try:
+            style.map(
+                "Treeview",
+                foreground=_tag_friendly("foreground"),
+                background=_tag_friendly("background"),
+            )
+        except tk.TclError:
+            pass
         self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=18)
+        self.tree.tag_configure("usado", background="#F6E05E")
         headings = {
+            "novo_id": "Novo ID",
             "id": "ID",
-            "nome": "Atração",
-            "cidade": "Cidade",
-            "abertura": "Abre",
-            "fechamento": "Fecha",
-            "cap": "Cap.",
-            "plog": "Plog",
-            "cohen": "Cohen",
+            "nome": "Nome da atração",
+            "categoria": "Categoria",
+            "descricao": "Descrição breve",
         }
+        widths = {"novo_id": 90, "id": 80, "nome": 260, "categoria": 150, "descricao": 420}
         for c, title in headings.items():
             self.tree.heading(c, text=title)
-            self.tree.column(c, width=90 if c == "cidade" else (100 if c != "nome" else 240))
+            self.tree.column(c, width=widths[c], minwidth=60, stretch=c == "descricao", anchor="w")
+        self.tree.bind("<ButtonRelease-1>", self._start_novo_id_edit)
         scroll_y = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll_y.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -413,7 +600,7 @@ class RoteiroDesktopApp(ctk.CTk):
         """Zera a tela (inclui Plog e Cohen em —), sem reler valores antigos da planilha."""
         self.nome_var.set("")
         self.pessoas_var.set("")
-        self.duracao_var.set("")
+        self.trip_calendar.clear()
         self.perfil_combo.set(FORM_BLANK)
         self.ritmo_combo.set(FORM_BLANK)
         for var in self.cidade_vars.values():
@@ -429,7 +616,7 @@ class RoteiroDesktopApp(ctk.CTk):
         profile = read_profile(self.workbook_path)
         self.nome_var.set(profile.nome_grupo)
         self.pessoas_var.set(str(profile.numero_pessoas) if profile.numero_pessoas else "")
-        self.duracao_var.set(str(profile.duracao_dias) if profile.duracao_dias else "")
+        self.trip_calendar.set_dates(profile.check_in, profile.check_out)
         self.perfil_combo.set(
             PERFIL_FORM_OPCOES[_index_or_zero(PERFIL_FORM_OPCOES, profile.perfil_predominante)]
         )
@@ -446,14 +633,14 @@ class RoteiroDesktopApp(ctk.CTk):
     def _profile_from_form(self) -> TouristProfile:
         try:
             pessoas = _parse_int_field(self.pessoas_var.get())
-            duracao = _parse_int_field(self.duracao_var.get())
         except ValueError:
             pessoas = 0
-            duracao = 0
         return TouristProfile(
             nome_grupo=self.nome_var.get().strip(),
             numero_pessoas=pessoas,
-            duracao_dias=duracao,
+            duracao_dias=0,
+            check_in=self.trip_calendar.check_in,
+            check_out=self.trip_calendar.check_out,
             perfil_predominante=normalize_form_choice(self.perfil_combo.get()),
             ritmo=normalize_form_choice(self.ritmo_combo.get()),
             cidades=[city for city, var in self.cidade_vars.items() if var.get()],
@@ -465,13 +652,13 @@ class RoteiroDesktopApp(ctk.CTk):
         try:
             profile = self._profile_from_form()
         except ValueError:
-            messagebox.showerror("Dados inválidos", "Número de pessoas e duração devem ser inteiros.")
+            messagebox.showerror("Dados inválidos", "Número de pessoas deve ser um inteiro.")
             return
         if self.pessoas_var.get().strip() and profile.numero_pessoas < 1:
             messagebox.showerror("Dados inválidos", "Número de pessoas deve ser pelo menos 1.")
             return
-        if self.duracao_var.get().strip() and profile.duracao_dias < 1:
-            messagebox.showerror("Dados inválidos", "Duração deve ser pelo menos 1 dia.")
+        if profile.check_in and profile.check_out and profile.check_out < profile.check_in:
+            messagebox.showerror("Dados inválidos", "O check-out deve ser na data do check-in ou depois.")
             return
 
         save_profile(self.workbook_path, profile)
@@ -502,6 +689,8 @@ class RoteiroDesktopApp(ctk.CTk):
         try:
             count = import_inventory_sheet(self.workbook_path, Path(path))
             remember_workbook(self.workbook_path)
+            self._used_order = []
+            self._novo_ids = {}
             self._refresh_inventory_table()
             with_maps, total = inventory_maps_coverage(self.workbook_path)
             maps_line = (
@@ -514,25 +703,120 @@ class RoteiroDesktopApp(ctk.CTk):
             messagebox.showerror("Erro", str(exc))
 
     def _refresh_inventory_table(self) -> None:
+        self._close_novo_id_edit(save=False)
         for item in self.tree.get_children():
             self.tree.delete(item)
         items = read_inventory(self.workbook_path)
-        for a in items:
+        used = set(self._used_order)
+        items.sort(key=lambda attraction: (attraction.id not in used, attraction.id))
+        for attraction in items:
             self.tree.insert(
                 "",
                 "end",
+                iid=attraction.id,
+                tags=("usado",) if attraction.id in used else (),
                 values=(
-                    a.id,
-                    a.nome,
-                    a.cidade or "—",
-                    a.horario_abertura.strftime("%H:%M") if a.horario_abertura else "—",
-                    a.horario_fechamento.strftime("%H:%M") if a.horario_fechamento else "—",
-                    a.capacidade,
-                    a.peso_plog,
-                    a.peso_cohen,
+                    self._novo_ids.get(attraction.id, ""),
+                    attraction.id,
+                    attraction.nome,
+                    attraction.categoria or "—",
+                    attraction.descricao or "—",
                 ),
             )
-        self.inv_count_label.configure(text=f"{len(items)} atração(ões)")
+        if used:
+            self.inv_count_label.configure(
+                text=f"{len(items)} atração(ões) · {len(used)} no roteiro"
+            )
+        else:
+            self.inv_count_label.configure(text=f"{len(items)} atração(ões)")
+
+    def _novo_id_choices(self, current_id: str) -> list[str]:
+        options = ["— manter o ID —"]
+        for attraction in read_inventory(self.workbook_path):
+            if attraction.id == current_id:
+                continue
+            if "hospedagem" in attraction.categoria.lower():
+                continue
+            options.append(f"{attraction.id} — {attraction.nome}")
+        return options
+
+    def _start_novo_id_edit(self, event: tk.Event) -> None:
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        if self.tree.identify_column(event.x) != "#1":
+            return
+        row = self.tree.identify_row(event.y)
+        if not row or row not in self._used_order:
+            return
+        if self._edit_row == row:
+            return
+        bbox = self.tree.bbox(row, "novo_id")
+        if not bbox:
+            return
+        self._close_novo_id_edit(save=True)
+        x, y, width, height = bbox
+        choices = self._novo_id_choices(row)
+        current = self._novo_ids.get(row, "")
+        selected = "— manter o ID —"
+        for option in choices:
+            if option.startswith(f"{current} —"):
+                selected = option
+                break
+        combo = ttk.Combobox(self.tree, values=choices, state="readonly")
+        combo.place(x=x, y=y, width=max(width, 280), height=height)
+        combo.set(selected)
+        combo.bind("<<ComboboxSelected>>", lambda _event: self._close_novo_id_edit(save=True))
+        combo.bind("<Escape>", lambda _event: self._close_novo_id_edit(save=False))
+        self._edit_entry = combo
+        self._edit_row = row
+        combo.focus_set()
+        combo.after(40, lambda widget=combo: widget.tk.call("ttk::combobox::Post", widget._w))
+
+    def _close_novo_id_edit(self, save: bool) -> None:
+        entry = self._edit_entry
+        row = self._edit_row
+        if entry is None:
+            return
+        self._edit_entry = None
+        self._edit_row = None
+        raw = entry.get().strip() if save else ""
+        entry.destroy()
+        if not save or not row:
+            return
+        if not raw or raw.startswith("—"):
+            self._novo_ids.pop(row, None)
+            value = ""
+        else:
+            value = raw.split(" — ", 1)[0].strip()
+            self._novo_ids[row] = value
+        if self.tree.exists(row):
+            self.tree.set(row, "novo_id", value)
+
+    def _pinned_ids_from_table(self) -> list[str] | None:
+        if not self._used_order:
+            return None
+        self._close_novo_id_edit(save=True)
+        profile = self._profile_from_form()
+        inventory = filter_inventory_by_cities(read_inventory(self.workbook_path), profile.cidades)
+        by_id = {attraction.id: attraction for attraction in inventory}
+        chosen: list[str] = []
+        seen: set[str] = set()
+        for original in self._used_order:
+            target = self._novo_ids.get(original, "").strip() or original
+            attraction = by_id.get(target)
+            if attraction is None:
+                raise ValueError(
+                    f"O ID '{target}' não está no inventário das cidades marcadas no perfil."
+                )
+            if "hospedagem" in attraction.categoria.lower():
+                raise ValueError(
+                    f"{target} é hospedagem. Informe o ID de um atrativo ou de uma gastronomia."
+                )
+            if target in seen:
+                raise ValueError(f"O ID {target} ficou repetido na nova seleção.")
+            seen.add(target)
+            chosen.append(target)
+        return chosen
 
     def _generate_pdf(self) -> None:
         if self._pdf_job_running:
@@ -563,6 +847,12 @@ class RoteiroDesktopApp(ctk.CTk):
             messagebox.showerror("Erro", str(exc))
             return
 
+        try:
+            pinned_ids = self._pinned_ids_from_table()
+        except ValueError as exc:
+            messagebox.showerror("Novo ID", str(exc))
+            return
+
         workbook = self.workbook_path
         self._pdf_job_running = True
         self.btn_generate_pdf.configure(state="disabled")
@@ -575,7 +865,7 @@ class RoteiroDesktopApp(ctk.CTk):
             pdf_path: Path | None = None
             preview_text = ""
             try:
-                result = gerar_roteiro_da_planilha(workbook)
+                result = gerar_roteiro_da_planilha(workbook, pinned_ids=pinned_ids)
                 pdf_path = OUT / roteiro_pdf_filename(result.profile.nome_grupo)
                 build_pdf(result, pdf_path)
                 preview_text = itinerary_to_markdown(result)
@@ -598,10 +888,22 @@ class RoteiroDesktopApp(ctk.CTk):
                 assert result is not None and pdf_path is not None
                 self.itinerary_result = result
                 self.last_pdf = pdf_path
+                self._used_order = [attraction.id for attraction in result.selected_attractions]
+                self._novo_ids = {}
+                self._refresh_inventory_table()
                 self.preview.delete("0.0", "end")
                 self.preview.insert("0.0", preview_text)
                 self.pdf_status.configure(text=f"PDF gerado: {pdf_path}")
-                messagebox.showinfo("Concluído", f"Roteiro PDF salvo em:\n{pdf_path}")
+                note = ""
+                if pinned_ids:
+                    kept = {attraction.id for attraction in result.selected_attractions}
+                    left_out = [item_id for item_id in pinned_ids if item_id not in kept]
+                    if left_out:
+                        note = (
+                            "\n\nNão couberam neste roteiro (horário, deslocamento ou ritmo): "
+                            + ", ".join(left_out)
+                        )
+                messagebox.showinfo("Concluído", f"Roteiro PDF salvo em:\n{pdf_path}{note}")
 
             self.after(0, finish)
 
@@ -651,6 +953,8 @@ class RoteiroDesktopApp(ctk.CTk):
         remember_workbook(self.workbook_path)
         self.last_pdf = None
         self.itinerary_result = None
+        self._used_order = []
+        self._novo_ids = {}
         self.preview.delete("0.0", "end")
         self.pdf_status.configure(text="")
         self._apply_empty_form()

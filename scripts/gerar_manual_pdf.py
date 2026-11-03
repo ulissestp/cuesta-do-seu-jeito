@@ -25,7 +25,7 @@ from src.branding import (
 )
 
 SCREENSHOTS = ROOT / "docs" / "screenshots"
-OUTPUT = ROOT / "docs" / "Manual_CUESTA_RT_v1.0_Beta.pdf"
+OUTPUT = ROOT / "docs" / "Manual_CUESTA_RT_v1.1.pdf"
 PLACEHOLDER_H = 10.5 * cm
 
 PAGE_W, PAGE_H = A4
@@ -283,7 +283,7 @@ def build_manual_pdf(output_path: Path | None = None, *, embed_screenshots: bool
             "6. Instalação e compilação",
             [
                 "<b>Executável:</b> <font face='Courier'>dist\\RoteiroTurismo.exe</font> "
-                "(ícone do logo, versão 1.0 Beta nas propriedades do arquivo).",
+                "(ícone do logo, versão 1.1 nas propriedades do arquivo).",
                 "<b>Compilar:</b> feche o app e execute "
                 "<font face='Courier'>powershell -File scripts\\build_desktop.ps1</font>.",
                 "<b>Chave Google Maps (opcional):</b> arquivo "

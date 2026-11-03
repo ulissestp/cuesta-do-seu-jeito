@@ -13,7 +13,10 @@ from src.group_scores import GroupScores
 from src.itinerary_engine import ItineraryResult, build_itinerary, itinerary_to_markdown
 
 
-def gerar_roteiro_da_planilha(workbook_path: Path) -> ItineraryResult:
+def gerar_roteiro_da_planilha(
+    workbook_path: Path,
+    pinned_ids: list[str] | None = None,
+) -> ItineraryResult:
     profile = read_profile(workbook_path)
     missing = validate_profile_for_roteiro(profile)
     if missing:
@@ -28,8 +31,15 @@ def gerar_roteiro_da_planilha(workbook_path: Path) -> ItineraryResult:
             f"Nenhuma atração encontrada para as cidades selecionadas ({cities}). "
             "Verifique a coluna Cidade (K) do inventário."
         )
+    if pinned_ids:
+        found = {item.id for item in inventory}
+        missing = [item_id for item_id in pinned_ids if item_id not in found]
+        if missing:
+            raise ValueError(
+                "ID não encontrado no inventário das cidades do perfil: " + ", ".join(missing)
+            )
     scores = GroupScores.from_profile(profile)
-    return build_itinerary(profile, inventory, scores)
+    return build_itinerary(profile, inventory, scores, pinned_ids=pinned_ids)
 
 
 def gerar_roteiro_markdown(workbook_path: Path) -> str:

@@ -1,6 +1,6 @@
 # Documentação técnica — CUESTA DO SEU JEITO · RT
 
-**Versão:** 1.0 Beta (`src/branding.py` → `APP_VERSION`)
+**Versão:** 1.1 (`src/branding.py` → `APP_VERSION`)
 
 ---
 
@@ -138,7 +138,7 @@ Parsing: padrões `@lat,lng`, `!3d!4d`, `q=lat,lng` em `geo_distance._parse_coor
 | Artefato | Função |
 |----------|--------|
 | `RoteiroTurismo.spec` | One-file exe, `datas=data/`, exclui streamlit |
-| `build/version_info.txt` | Metadados Windows (Product version 1.0 Beta) |
+| `build/version_info.txt` | Metadados Windows (Product version 1.1) |
 | `scripts/build_desktop.ps1` | pip install, `ensure_app_icon`, pyinstaller |
 
 Comando:
@@ -182,7 +182,7 @@ pyinstaller              # build apenas
 | Nova cidade | `CIDADES_ROTEIRO`, `CITY_CENTROIDS` em `geo_distance.py` |
 | Regras de horário | `itinerary_engine.py` (constantes no topo) |
 | Colunas inventário | `FULL_INVENTORY_HEADERS`, parsers em `excel_io.py` |
-| Texto análise técnica | `group_scores.build_technical_analysis` (nota: texto ainda menciona “30 min” genérico; tempos reais vêm de `geo_distance`) |
+| Texto análise técnica | `group_scores.build_technical_analysis` (deslocamento máximo de 40 minutos) |
 
 ---
 

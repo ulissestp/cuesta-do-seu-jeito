@@ -21,7 +21,14 @@ from reportlab.platypus import (
 from src.app_paths import logo_path
 from src.attraction_images import attraction_thumbnail_flowable
 from src.branding import APP_NAME_PDF, APP_TAGLINE, APP_VERSION, pdf_version_label
-from src.itinerary_engine import DayPlan, ItineraryResult, ScheduleBlock, _fmt_time, _lodging_options_summary
+from src.itinerary_engine import (
+    DayPlan,
+    ItineraryResult,
+    ScheduleBlock,
+    _fmt_time,
+    _lodging_options_summary,
+    day_heading,
+)
 from src.maps_links import maps_pdf_html
 
 PAGE_W, PAGE_H = A4
@@ -96,7 +103,7 @@ def _draw_page_chrome(canvas, doc, client_name: str) -> None:
     canvas.restoreState()
 
 
-def _cover_block(client_name: str, duracao: int, body: ParagraphStyle, brand: ParagraphStyle) -> Table:
+def _cover_block(client_name: str, period: str, body: ParagraphStyle, brand: ParagraphStyle) -> Table:
     logo_cell: list = []
     path = logo_path()
     if path.exists():
@@ -107,7 +114,7 @@ def _cover_block(client_name: str, duracao: int, body: ParagraphStyle, brand: Pa
     text = Paragraph(
         f"<b>{APP_NAME_PDF}</b><br/>{APP_TAGLINE}<br/>{pdf_version_label()}<br/><br/>"
         f"<b>Cliente:</b> {client_name}<br/>"
-        f"<b>Duração:</b> {duracao} dia(s)",
+        f"<b>Período:</b> {period}",
         brand,
     )
 
@@ -142,7 +149,15 @@ def _profile_summary_table(result: ItineraryResult, body: ParagraphStyle, label:
         [
             Paragraph(p.nome_grupo, body),
             Paragraph(f"{p.numero_pessoas} pessoas<br/>({p.perfil_predominante})", body),
-            Paragraph(f"{p.duracao_dias} dia(s)", body),
+            Paragraph(
+                (
+                    f"{p.check_in.strftime('%d/%m/%Y')} a {p.check_out.strftime('%d/%m/%Y')}<br/>"
+                    if p.check_in and p.check_out
+                    else ""
+                )
+                + f"{p.duracao_dias} dia(s)",
+                body,
+            ),
         ],
         [
             Paragraph("<b>Ritmo desejado</b>", label),
@@ -268,7 +283,7 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
 
 def _day_timeline_section(day: DayPlan, h2: ParagraphStyle, body: ParagraphStyle, title: ParagraphStyle) -> list:
     elements: list = [
-        Paragraph(f"DIA {day.day_number} — {day.theme}", h2),
+        Paragraph(day_heading(day), h2),
         Paragraph("Linha do tempo da programação", body),
         Spacer(1, 0.15 * cm),
     ]
@@ -340,7 +355,17 @@ def build_pdf(result: ItineraryResult, output_path: Path) -> Path:
 
     p = result.profile
     story = [
-        _cover_block(client_name, p.duracao_dias, body, brand),
+        _cover_block(
+            client_name,
+            (
+                f"{p.check_in.strftime('%d/%m/%Y')} a {p.check_out.strftime('%d/%m/%Y')} "
+                f"({p.duracao_dias} dia(s))"
+                if p.check_in and p.check_out
+                else f"{p.duracao_dias} dia(s)"
+            ),
+            body,
+            brand,
+        ),
         Spacer(1, 0.35 * cm),
         Paragraph("Quadro-resumo do perfil do cliente", section),
         _profile_summary_table(result, body, label),
