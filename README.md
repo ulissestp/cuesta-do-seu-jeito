@@ -43,7 +43,7 @@ Feche o programa antes de compilar.
 powershell -ExecutionPolicy Bypass -File scripts\build_desktop.ps1
 ```
 
-Saída: `dist\RoteiroTurismo.exe` (logo e versão **1.2.1** embutidos).
+Saída: `dist\RoteiroTurismo.exe` (logo e versão **1.2.2** embutidos).
 
 ### Streamlit (opcional)
 

@@ -291,7 +291,7 @@ def _open_for_evening_dining(attraction: Attraction, day_anchor: datetime) -> bo
     open_dt = _combine(day_anchor, hours[0])
     close_dt = _combine(day_anchor, hours[1])
     evening = _combine(day_anchor, EVENING_DINING_START)
-    return open_dt <= evening and close_dt > evening
+    return open_dt <= evening and close_dt >= evening
 
 
 def _open_on_trip_evening(attraction: Attraction, dates: list[date]) -> bool:
@@ -528,8 +528,9 @@ def _evening_gastronomy_options_summary(attractions: list[Attraction]) -> str:
     if not attractions:
         return "—"
     lines = [
-        "Sugestões para o período da noite (gastronomia aberta após 19h) — "
-        "não entram na programação horária do dia."
+        "Sugestões para o jantar (gastronomia aberta às 19h ou depois). "
+        "As opções entram na linha do tempo após a hospedagem, "
+        "sem deslocamento roteirizado entre elas."
     ]
     for i, attraction in enumerate(attractions, 1):
         maps_part = _maps_plain_suffix(attraction.maps_url)
@@ -538,6 +539,47 @@ def _evening_gastronomy_options_summary(attractions: list[Attraction]) -> str:
             f"{_valor_clause(attraction)}{maps_part}"
         )
     return "\n".join(lines)
+
+
+def _evening_dining_detail(attraction: Attraction) -> str:
+    return (
+        f"Sugestão para o jantar. Cidade: {_city_label(attraction)}. "
+        f"{attraction.descricao}{_valor_clause(attraction)}"
+    )
+
+
+def _insert_evening_dining_timeline_blocks(
+    blocks: list[ScheduleBlock],
+    insert_at: int,
+    day_anchor: datetime,
+    suggestions: list[Attraction],
+) -> None:
+    if not suggestions:
+        return
+    marker = _combine(day_anchor, EVENING_DINING_START)
+    segment: list[ScheduleBlock] = [
+        ScheduleBlock(
+            start=marker,
+            end=marker,
+            title=EVENING_DINING_TIMELINE_TITLE,
+            detail="Três opções abaixo — sem deslocamento entre as sugestões.",
+            kind="evening_dining",
+        )
+    ]
+    for index, attraction in enumerate(suggestions, start=1):
+        segment.append(
+            ScheduleBlock(
+                start=marker,
+                end=marker,
+                title=f"Opção {index} — {_visit_title(attraction)}",
+                detail=_evening_dining_detail(attraction),
+                kind="evening_dining",
+                maps_url=attraction.maps_url,
+                image_url=attraction.image_url,
+            )
+        )
+    for offset, block in enumerate(segment):
+        blocks.insert(insert_at + offset, block)
 
 
 def _fmt_time(dt: datetime) -> str:
@@ -915,11 +957,9 @@ def build_itinerary(
     evening_dining = _pick_evening_gastronomy_suggestions(
         profile, inventory, scores, used_global, dates
     )
-    for day_plan in days:
-        if not evening_dining:
-            break
+    if days and evening_dining:
+        day_plan = days[0]
         anchor = day_plan.service_date or _day_anchor(day_plan.day_number)
-        night_marker = _combine(anchor, time(18, 0))
         insert_at = len(day_plan.blocks)
         for index, block in enumerate(day_plan.blocks):
             if block.kind == "lodging":
@@ -927,16 +967,7 @@ def build_itinerary(
                 break
             if block.kind == "end":
                 insert_at = index + 1
-        day_plan.blocks.insert(
-            insert_at,
-            ScheduleBlock(
-                start=night_marker,
-                end=night_marker,
-                title=EVENING_DINING_TIMELINE_TITLE,
-                detail="",
-                kind="evening_dining",
-            ),
-        )
+        _insert_evening_dining_timeline_blocks(day_plan.blocks, insert_at, anchor, evening_dining)
 
     by_id = {a.id: a for a in inventory}
     used_attractions = [
@@ -1037,10 +1068,9 @@ def itinerary_to_markdown(result: ItineraryResult) -> str:
             if block.kind == "lodging" and block.start == block.end:
                 lines.append(f"**Noite — {block.title}**")
             elif block.kind == "evening_dining" and block.start == block.end:
-                lines.append(f"**Noite — {block.title}**")
-                lines.append(
-                    _evening_gastronomy_options_summary(result.evening_gastronomy_suggestions)
-                )
+                detail = _block_detail_markdown(block) if block.detail else ""
+                suffix = f" — {detail}" if detail else ""
+                lines.append(f"**{_fmt_time(block.start)} — {block.title}**{suffix}")
             elif block.kind == "end" and block.start == block.end:
                 lines.append(f"**{_fmt_time(block.start)} — {block.title}** — {block.detail}")
             else:

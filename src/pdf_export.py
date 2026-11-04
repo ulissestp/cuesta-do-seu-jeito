@@ -67,6 +67,8 @@ def _kind_colors(kind: str) -> tuple[colors.Color, colors.Color]:
 
 def _time_label(block: ScheduleBlock) -> str:
     if block.kind in ("lodging", "evening_dining") and block.start == block.end:
+        if block.kind == "evening_dining":
+            return _fmt_time(block.start)
         return "Noite"
     if block.kind == "end" and block.start == block.end:
         return _fmt_time(block.start)
@@ -263,7 +265,7 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
         marker = "◈"
 
     time_cell: list = [Paragraph(f"<b>{_time_label(block)}</b>", body)]
-    if block.kind in ("visit", "lunch"):
+    if block.kind in ("visit", "lunch", "evening_dining"):
         thumb = attraction_thumbnail_flowable(
             maps_url=block.maps_url,
             place_title=block.title,
@@ -284,8 +286,16 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
     }
     mc = marker_colors.get(block.kind, "#3182CE")
     marker_cell = Paragraph(f'<font color="{mc}"><b>{marker}</b></font>', body)
-    if block.kind in ("lodging", "evening_dining"):
+    if block.kind == "lodging":
         content = Paragraph(f"<b>{block.title}</b>", title)
+    elif block.kind == "evening_dining":
+        detail_html = block.detail.replace("\n", "<br/>") if block.detail else ""
+        if block.maps_url:
+            detail_html += maps_pdf_html(block.maps_url)
+        if detail_html:
+            content = Paragraph(f"<b>{block.title}</b><br/>{detail_html}", title)
+        else:
+            content = Paragraph(f"<b>{block.title}</b>", title)
     else:
         detail_html = block.detail.replace("\n", "<br/>")
         if block.maps_url:

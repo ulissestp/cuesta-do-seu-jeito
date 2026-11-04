@@ -1,7 +1,7 @@
 APP_NAME = "CUESTA DO SEU JEITO - Roteiros Turísticos"
 APP_NAME_PDF = "CUESTA DO SEU JEITO"
 APP_TAGLINE = "Roteiros Turísticos"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 APP_VERSION_SHORT = "1.2"
 
 
