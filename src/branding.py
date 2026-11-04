@@ -1,8 +1,8 @@
 APP_NAME = "CUESTA DO SEU JEITO - Roteiros Turísticos"
 APP_NAME_PDF = "CUESTA DO SEU JEITO"
 APP_TAGLINE = "Roteiros Turísticos"
-APP_VERSION = "1.1"
-APP_VERSION_SHORT = "1.1"
+APP_VERSION = "1.2.0"
+APP_VERSION_SHORT = "1.2"
 
 
 def desktop_window_title() -> str:
