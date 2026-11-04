@@ -33,3 +33,8 @@ def output_dir() -> Path:
     path = writable_root() / "output"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def docs_dir() -> Path:
+    """Documentação empacotada (MEIPASS/docs) ou pasta docs do repositório."""
+    return project_root() / "docs"

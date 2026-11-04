@@ -40,6 +40,8 @@ from src.pdf_export import build_pdf, roteiro_pdf_filename
 from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 from src.roteiro_service import gerar_roteiro_da_planilha
 from src.session_store import load_last_workbook, remember_workbook
+from src.help_docs import load_help_markdown, user_manual_md_path, user_manual_pdf_path
+from src.inventory_sync import check_and_apply_inventory_update, load_local_inventory_version
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -62,6 +64,20 @@ def _init_state() -> None:
         st.session_state.itinerary_result = None
     if "last_anamnese_pdf" not in st.session_state:
         st.session_state.last_anamnese_pdf = None
+    if "inventory_sync_checked" not in st.session_state:
+        st.session_state.inventory_sync_checked = False
+
+
+def _run_inventory_sync_once() -> None:
+    if st.session_state.inventory_sync_checked:
+        return
+    st.session_state.inventory_sync_checked = True
+    with st.spinner("Verificando atualização do inventário no GitHub…"):
+        result = check_and_apply_inventory_update(st.session_state.workbook_path)
+    if result.status == "updated":
+        st.success(result.message)
+    elif result.status == "error":
+        st.warning(result.message)
 
 
 def _show_scores_panel(profile: TouristProfile) -> None:
@@ -181,6 +197,21 @@ def step_profile() -> None:
 
 def step_inventory() -> None:
     st.subheader("2. Inventário turístico")
+    ver = load_local_inventory_version()
+    st.caption(
+        f"Catálogo local: versão **{ver or 'ainda não sincronizado'}**. "
+        "Duplicatas (mesmo ID ou mesmo nome+cidade) são removidas ao atualizar."
+    )
+    if st.button("Verificar atualização do inventário"):
+        with st.spinner("Baixando catálogo e mesclando…"):
+            result = check_and_apply_inventory_update(st.session_state.workbook_path)
+        if result.status == "updated":
+            st.success(result.message)
+        elif result.status == "up_to_date":
+            st.info(result.message)
+        else:
+            st.warning(result.message)
+        st.rerun()
     st.caption(
         "Modelo com **11 colunas** (… descrição e **Cidade** na coluna K). "
         "O roteiro usa só atrações das cidades marcadas no perfil."
@@ -289,6 +320,34 @@ def step_anamnese_pdf() -> None:
         )
 
 
+def step_help() -> None:
+    st.subheader("Ajuda")
+    st.caption("Guia rápido. Manual completo disponível para download abaixo.")
+    st.markdown(load_help_markdown())
+
+    pdf_path = user_manual_pdf_path()
+    md_path = user_manual_md_path()
+    c1, c2 = st.columns(2)
+    if pdf_path.is_file():
+        c1.download_button(
+            "Baixar manual do usuário (PDF)",
+            pdf_path.read_bytes(),
+            file_name=pdf_path.name,
+            mime="application/pdf",
+        )
+    else:
+        c1.warning("Manual PDF não encontrado em `docs/`.")
+    if md_path.is_file():
+        c2.download_button(
+            "Baixar manual do usuário (Markdown)",
+            md_path.read_text(encoding="utf-8").encode("utf-8"),
+            file_name=md_path.name,
+            mime="text/markdown",
+        )
+    else:
+        c2.warning("Manual Markdown não encontrado em `docs/`.")
+
+
 def _index_or_zero(options: list[str], value: str) -> int:
     if is_form_blank(value):
         return 0
@@ -310,6 +369,7 @@ def _score_form_index(value: int) -> int:
 def main() -> None:
     st.set_page_config(page_title=desktop_window_title(), page_icon="🧭", layout="wide")
     _init_state()
+    _run_inventory_sync_once()
 
     st.title(f"🧭 {desktop_window_title()}")
     st.markdown("Perfil → inventário → **score automático (seção 4)** → PDF do roteiro → **ficha anamnese**.")
@@ -333,8 +393,12 @@ def main() -> None:
         st.session_state.pop("last_pdf", None)
         st.rerun()
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["1. Perfil", "2. Inventário", "3. Roteiro PDF", "4. Ficha anamnese"]
+    st.sidebar.markdown("---")
+    st.sidebar.header("Ajuda")
+    st.sidebar.caption("Abra a aba **Ajuda** para o guia rápido e downloads do manual.")
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+        ["1. Perfil", "2. Inventário", "3. Roteiro PDF", "4. Ficha anamnese", "Ajuda"]
     )
     with tab1:
         step_profile()
@@ -344,6 +408,8 @@ def main() -> None:
         step_roteiro_pdf()
     with tab4:
         step_anamnese_pdf()
+    with tab5:
+        step_help()
 
 
 if __name__ == "__main__":

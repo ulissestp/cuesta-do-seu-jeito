@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
-from src.app_paths import output_dir, project_root
+from src.app_paths import output_dir, project_root, docs_dir
 from src.app_icon import ensure_app_icon
 from src.branding import desktop_header_text, desktop_window_title
 from src.excel_io import (
@@ -53,6 +53,12 @@ from src.itinerary_engine import itinerary_to_markdown
 from src.pdf_export import build_pdf, roteiro_pdf_filename
 from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 from src.roteiro_service import gerar_roteiro_da_planilha
+from src.help_docs import load_help_markdown, user_manual_md_path, user_manual_pdf_path
+from src.inventory_sync import (
+    InventoryUpdateResult,
+    check_and_apply_inventory_update,
+    load_local_inventory_version,
+)
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
@@ -266,9 +272,46 @@ class RoteiroDesktopApp(ctk.CTk):
         self.cohen_combos: dict[str, ctk.CTkComboBox] = {}
         self.cidade_vars: dict[str, tk.BooleanVar] = {}
 
+        self._build_menu()
         self._build_header()
         self._build_tabs()
         self._load_profile_into_form()
+        self.after(600, self._schedule_inventory_sync_check)
+
+    def _schedule_inventory_sync_check(self) -> None:
+        threading.Thread(target=self._inventory_sync_worker, daemon=True).start()
+
+    def _inventory_sync_worker(self) -> None:
+        try:
+            result = check_and_apply_inventory_update(self.workbook_path)
+        except Exception as exc:
+            result = InventoryUpdateResult(
+                status="error",
+                message=str(exc),
+                local_version=load_local_inventory_version(),
+            )
+        self.after(0, lambda r=result: self._finish_inventory_sync(r))
+
+    def _finish_inventory_sync(self, result) -> None:
+        if hasattr(self, "inv_sync_label"):
+            if result.status == "up_to_date":
+                self.inv_sync_label.configure(
+                    text=f"Catálogo v{result.remote_version or result.local_version or '—'}"
+                )
+            elif result.status == "updated":
+                self.inv_sync_label.configure(text=result.message[:120])
+                self._refresh_inventory_table()
+                messagebox.showinfo("Inventário atualizado", result.message)
+            elif result.status == "offline":
+                ver = load_local_inventory_version() or "local"
+                self.inv_sync_label.configure(text=f"Catálogo {ver} (sem verificação online)")
+            else:
+                self.inv_sync_label.configure(text=result.message[:120])
+
+    def _check_inventory_update_manual(self) -> None:
+        self.inv_sync_label.configure(text="Verificando atualização do inventário…")
+        self.update_idletasks()
+        self._schedule_inventory_sync_check()
 
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self, corner_radius=0)
@@ -294,6 +337,88 @@ class RoteiroDesktopApp(ctk.CTk):
         ctk.CTkButton(header, text="Nova planilha", width=120, command=self._new_workbook).pack(
             side="right", padx=8, pady=8
         )
+        ctk.CTkButton(header, text="Ajuda", width=80, command=self._show_help_window).pack(
+            side="right", padx=8, pady=8
+        )
+
+    def _build_menu(self) -> None:
+        menubar = tk.Menu(self)
+        self.configure(menu=menubar)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Ajuda", menu=help_menu)
+        help_menu.add_command(
+            label="Ajuda rápida",
+            command=self._show_help_window,
+            accelerator="F1",
+        )
+        help_menu.add_separator()
+        help_menu.add_command(
+            label="Manual do usuário (PDF)",
+            command=self._open_user_manual_pdf,
+        )
+        help_menu.add_command(
+            label="Manual do usuário (Markdown)",
+            command=self._open_user_manual_md,
+        )
+        help_menu.add_command(
+            label="Abrir pasta de documentação",
+            command=self._open_docs_folder,
+        )
+
+        self.bind("<F1>", lambda _event: self._show_help_window())
+
+    def _show_help_window(self) -> None:
+        existing = getattr(self, "_help_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title("Ajuda — CUESTA DO SEU JEITO")
+        win.geometry("720x560")
+        win.minsize(480, 320)
+        self._help_window = win
+
+        ctk.CTkLabel(
+            win,
+            text="Ajuda rápida",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=12, pady=(12, 4))
+
+        text = ctk.CTkTextbox(win, wrap="word", font=ctk.CTkFont(size=13))
+        text.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        text.insert("0.0", load_help_markdown())
+        text.configure(state="disabled")
+
+        btn_row = ctk.CTkFrame(win, fg_color="transparent")
+        btn_row.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(btn_row, text="Fechar", width=100, command=win.destroy).pack(side="right")
+        ctk.CTkButton(
+            btn_row,
+            text="Manual (PDF)",
+            command=self._open_user_manual_pdf,
+        ).pack(side="right", padx=(0, 8))
+
+    def _open_path_or_warn(self, path: Path, label: str) -> None:
+        if not path.is_file():
+            messagebox.showwarning("Ajuda", f"{label} não encontrado:\n{path}")
+            return
+        os.startfile(path)
+
+    def _open_user_manual_pdf(self) -> None:
+        self._open_path_or_warn(user_manual_pdf_path(), "Manual PDF")
+
+    def _open_user_manual_md(self) -> None:
+        self._open_path_or_warn(user_manual_md_path(), "Manual Markdown")
+
+    def _open_docs_folder(self) -> None:
+        folder = docs_dir()
+        if not folder.is_dir():
+            messagebox.showwarning("Ajuda", f"Pasta não encontrada:\n{folder}")
+            return
+        os.startfile(folder)
 
     def _build_tabs(self) -> None:
         self.tabs = ctk.CTkTabview(self)
@@ -460,8 +585,22 @@ class RoteiroDesktopApp(ctk.CTk):
         ctk.CTkButton(top, text="Salvar modelo de inventário", command=self._save_inventory_template).pack(
             side="left", padx=8
         )
+        ctk.CTkButton(
+            top,
+            text="Verificar atualização do inventário",
+            command=self._check_inventory_update_manual,
+        ).pack(side="left", padx=8)
         self.inv_count_label = ctk.CTkLabel(top, text="")
         self.inv_count_label.pack(side="left", padx=12)
+        self.inv_sync_label = ctk.CTkLabel(
+            parent,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="gray",
+            wraplength=980,
+            justify="left",
+        )
+        self.inv_sync_label.pack(anchor="w", pady=(0, 4))
 
         ctk.CTkLabel(
             parent,

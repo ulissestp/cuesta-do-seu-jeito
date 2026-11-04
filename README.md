@@ -10,6 +10,7 @@ Aplicativo **desktop para Windows** (recomendado). Versão web opcional via Stre
 
 | Documento | Público | Conteúdo |
 |-----------|---------|----------|
+| [Ajuda no aplicativo](docs/AJUDA.md) | Operadores | Guia rápido (menu **Ajuda** / aba **Ajuda** / F1 no desktop) |
 | [Manual do usuário](docs/MANUAL_DO_USUARIO.md) | Operadores, guias, equipe comercial | Instalação, abas do programa, planilha, PDFs, dicas |
 | [Manual em PDF](docs/Manual_CUESTA_RT_v1.1.pdf) | Operadores | Texto do manual com capturas de tela |
 | [Documentação técnica](docs/DOCUMENTACAO_TECNICA.md) | Desenvolvedores | Arquitetura, módulos, motor de roteiro, build |

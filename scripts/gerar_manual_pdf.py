@@ -1,6 +1,8 @@
-"""Gera PDF do manual do usuário com capturas de tela."""
+"""Gera PDF do manual do usuário a partir de docs/MANUAL_DO_USUARIO.md."""
 from __future__ import annotations
 
+import html
+import re
 import sys
 from pathlib import Path
 
@@ -24,12 +26,21 @@ from src.branding import (
     pdf_version_label,
 )
 
+MANUAL_MD = ROOT / "docs" / "MANUAL_DO_USUARIO.md"
 SCREENSHOTS = ROOT / "docs" / "screenshots"
 OUTPUT = ROOT / "docs" / "Manual_CUESTA_RT_v1.1.pdf"
 PLACEHOLDER_H = 10.5 * cm
 
 PAGE_W, PAGE_H = A4
 MARGIN = 2 * cm
+
+# Figura inserida antes destes capítulos (após o texto do capítulo anterior).
+SCREENSHOT_BEFORE_HEADING: dict[str, tuple[str, str]] = {
+    "5. Aba 2": ("01_perfil.png", "Aba 1 — Perfil do turista"),
+    "6. Aba 3": ("02_inventario.png", "Aba 2 — Inventário turístico"),
+    "7. Aba 4": ("03_roteiro_pdf.png", "Aba 3 — Geração do roteiro em PDF"),
+    "8. Pasta": ("04_ficha_anamnese.png", "Aba 4 — Ficha de anamnese"),
+}
 
 
 def _styles():
@@ -82,7 +93,28 @@ def _styles():
             alignment=TA_CENTER,
             spaceAfter=10,
         ),
+        "code": ParagraphStyle(
+            "CodeBlock",
+            parent=base["Code"],
+            fontSize=9,
+            leading=12,
+            fontName="Courier",
+            leftIndent=8,
+            backColor=colors.HexColor("#EDF2F7"),
+        ),
     }
+
+
+def md_inline(text: str) -> str:
+    text = html.escape(text, quote=False)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(
+        r"`([^`]+)`",
+        r'<font face="Courier" size="9">\1</font>',
+        text,
+    )
+    text = text.replace("&lt;b&gt;", "<b>").replace("&lt;/b&gt;", "</b>")
+    return text
 
 
 def _cover(st) -> list:
@@ -97,9 +129,8 @@ def _cover(st) -> list:
     story.append(Spacer(1, 0.8 * cm))
     story.append(
         Paragraph(
-            "<b>Manual do usuário</b> do aplicativo desktop (Windows). "
-            "Os retângulos cinza reservam espaço para colar ou imprimir "
-            "<b>capturas de tela</b> de cada aba.",
+            "<b>Manual do usuário</b> gerado a partir de "
+            "<font face='Courier'>docs/MANUAL_DO_USUARIO.md</font>.",
             st["body"],
         )
     )
@@ -107,16 +138,7 @@ def _cover(st) -> list:
     return story
 
 
-def _section(st, title: str, paragraphs: list[str]) -> list:
-    story = [Paragraph(title, st["h1"])]
-    for p in paragraphs:
-        story.append(Paragraph(p, st["body"]))
-        story.append(Spacer(1, 0.15 * cm))
-    return story
-
-
 def _screenshot_placeholder(st, caption: str, hint: str = "") -> list:
-    """Área reservada para captura de tela (sem imagem embutida)."""
     box_w = PAGE_W - 2 * MARGIN
     label = Paragraph(
         f"<font color='#718096'><i>Inserir captura de tela aqui</i></font>"
@@ -151,7 +173,6 @@ def _screenshot(st, filename: str, caption: str, *, use_image: bool = False) -> 
     if not use_image:
         return _screenshot_placeholder(st, caption, hint=filename)
     path = SCREENSHOTS / filename
-    story: list = []
     if not path.is_file():
         return _screenshot_placeholder(st, caption, hint=filename)
     img = Image(str(path))
@@ -161,10 +182,135 @@ def _screenshot(st, filename: str, caption: str, *, use_image: bool = False) -> 
     scale = min(max_w / iw, max_h / ih, 1.0)
     img.drawWidth = iw * scale
     img.drawHeight = ih * scale
-    story.append(Spacer(1, 0.2 * cm))
-    story.append(img)
-    story.append(Paragraph(f"<b>Figura:</b> {caption}", st["caption"]))
-    story.append(Spacer(1, 0.35 * cm))
+    return [
+        Spacer(1, 0.2 * cm),
+        img,
+        Paragraph(f"<b>Figura:</b> {caption}", st["caption"]),
+        Spacer(1, 0.35 * cm),
+    ]
+
+
+def _screenshot_for_heading(st, heading: str, *, use_image: bool) -> list:
+    for key, (filename, caption) in SCREENSHOT_BEFORE_HEADING.items():
+        if heading.startswith(key) or key in heading:
+            return _screenshot(st, filename, caption, use_image=use_image)
+    return []
+
+
+def _parse_table(lines: list[str], start: int) -> tuple[list[list[str]], int]:
+    rows: list[list[str]] = []
+    i = start
+    while i < len(lines) and lines[i].strip().startswith("|"):
+        raw = lines[i].strip()
+        inner = raw.strip("|").replace(" ", "")
+        if inner and set(inner) <= set("-:|"):
+            i += 1
+            continue
+        cells = [cell.strip() for cell in raw.strip("|").split("|")]
+        rows.append(cells)
+        i += 1
+    return rows, i
+
+
+def _markdown_table(st, rows: list[list[str]]) -> list:
+    if not rows:
+        return []
+    ncols = max(len(r) for r in rows)
+    normalized = [row + [""] * (ncols - len(row)) for row in rows]
+    data = [[Paragraph(md_inline(cell), st["body"]) for cell in row] for row in normalized]
+    avail = PAGE_W - 2 * MARGIN
+    col_w = avail / ncols
+    table = Table(data, colWidths=[col_w] * ncols, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E2E8F0")),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E0")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    return [Spacer(1, 0.15 * cm), table, Spacer(1, 0.25 * cm)]
+
+
+def _story_from_markdown(md_text: str, st, *, embed_screenshots: bool) -> list:
+    lines = md_text.splitlines()
+    story: list = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith("# ") and i == 0:
+            i += 1
+            continue
+
+        if stripped == "---":
+            story.append(Spacer(1, 0.25 * cm))
+            i += 1
+            continue
+
+        if stripped.startswith("## "):
+            title = stripped[3:].strip()
+            story.extend(_screenshot_for_heading(st, title, use_image=embed_screenshots))
+            story.append(Paragraph(md_inline(title), st["h1"]))
+            i += 1
+            continue
+
+        if stripped.startswith("### "):
+            story.append(Paragraph(md_inline(stripped[4:].strip()), st["h2"]))
+            i += 1
+            continue
+
+        if stripped.startswith("|"):
+            rows, i = _parse_table(lines, i)
+            story.extend(_markdown_table(st, rows))
+            continue
+
+        if stripped.startswith("```"):
+            i += 1
+            code_lines: list[str] = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            if i < len(lines):
+                i += 1
+            code_html = "<br/>".join(html.escape(part) for part in code_lines)
+            story.append(Paragraph(f'<font face="Courier" size="9">{code_html}</font>', st["code"]))
+            story.append(Spacer(1, 0.15 * cm))
+            continue
+
+        if stripped.startswith("- "):
+            story.append(
+                Paragraph(md_inline(stripped[2:].strip()), st["bullet"], bulletText="•")
+            )
+            i += 1
+            continue
+
+        numbered = re.match(r"^(\d+)\.\s+(.*)$", stripped)
+        if numbered:
+            story.append(
+                Paragraph(
+                    md_inline(numbered.group(2)),
+                    st["bullet"],
+                    bulletText=f"{numbered.group(1)}.",
+                )
+            )
+            i += 1
+            continue
+
+        if not stripped:
+            i += 1
+            continue
+
+        story.append(Paragraph(md_inline(stripped), st["body"]))
+        story.append(Spacer(1, 0.08 * cm))
+        i += 1
+
     return story
 
 
@@ -180,10 +326,18 @@ def _footer(canvas, doc) -> None:
     canvas.restoreState()
 
 
+def _screenshots_available() -> bool:
+    return all((SCREENSHOTS / name).is_file() for name, _ in SCREENSHOT_BEFORE_HEADING.values())
+
+
 def build_manual_pdf(output_path: Path | None = None, *, embed_screenshots: bool = False) -> Path:
     output_path = output_path or OUTPUT
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not MANUAL_MD.is_file():
+        raise FileNotFoundError(f"Manual Markdown não encontrado: {MANUAL_MD}")
+
     st = _styles()
+    md_text = MANUAL_MD.read_text(encoding="utf-8")
 
     doc = SimpleDocTemplate(
         str(output_path),
@@ -199,121 +353,22 @@ def build_manual_pdf(output_path: Path | None = None, *, embed_screenshots: bool
 
     story: list = []
     story.extend(_cover(st))
-
-    story.extend(
-        _section(
-            st,
-            "1. Introdução",
-            [
-                f"O <b>{APP_NAME}</b> monta roteiros turísticos personalizados com base no "
-                "perfil do grupo (eixos Plog e Cohen), inventário em Excel e regras de "
-                "horário. Não utiliza inteligência artificial.",
-                "Fluxo recomendado: preencher <b>Perfil</b> → importar <b>Inventário</b> → "
-                "gerar <b>Roteiro PDF</b> e, se necessário, <b>Ficha anamnese</b>. "
-                "Arquivos ficam na pasta <b>output</b> (ao lado do executável ou na raiz do projeto).",
-            ],
-        )
-    )
-
-    story.extend(
-        _section(
-            st,
-            "2. Aba Perfil — dados do grupo",
-            [
-                "Informe nome do grupo, número de pessoas, duração em dias, perfil predominante "
-                "e ritmo (Relaxado, Moderado ou Intenso). Marque ao menos uma cidade "
-                "(Botucatu, Pardinho, Bofete).",
-                "Responda às seis perguntas Plog (1–5) e Cohen (1–5). Clique em "
-                "<b>Gravar na planilha</b>. A seção 4 exibe Média Plog, Média Cohen e "
-                "fator restritivo.",
-            ],
-        )
-    )
-    def shot(name: str, cap: str) -> list:
-        return _screenshot(st, name, cap, use_image=embed_screenshots)
-
-    story.extend(shot("01_perfil.png", "Aba 1 — Perfil do turista"))
-
-    story.extend(
-        _section(
-            st,
-            "3. Aba Inventário",
-            [
-                "Use <b>Importar inventário (.xlsx)</b> com o modelo "
-                "(<i>Modelo_Inventario_Turistico.xlsx</i>). Colunas essenciais: horários, "
-                "tempo médio, pesos Plog/Cohen, cidade e link <b>Maps</b>.",
-                "Links curtos do Google Maps permitem calcular distância e tempo entre "
-                "atrativos (requer internet na primeira geração).",
-            ],
-        )
-    )
-    story.extend(shot("02_inventario.png", "Aba 2 — Inventário turístico"))
-
-    story.extend(
-        _section(
-            st,
-            "4. Aba Roteiro PDF",
-            [
-                "<b>Gerar roteiro e PDF</b> valida o perfil e produz o arquivo na pasta output. "
-                "Primeira visita do dia inicia até <b>9h30</b>; almoço 12h–13h30; fim até "
-                "<b>18h</b>. Deslocamentos usam distância entre coordenadas dos links Maps.",
-                "O PDF inclui capa, quadro-resumo, linha do tempo por dia, miniaturas de mapa "
-                "e análise técnica.",
-            ],
-        )
-    )
-    story.extend(shot("03_roteiro_pdf.png", "Aba 3 — Geração do roteiro em PDF"))
-
-    story.extend(
-        _section(
-            st,
-            "5. Aba Ficha anamnese",
-            [
-                "Gera PDF para arquivo do grupo: dados clínicos com checkboxes para marcar à "
-                "mão e <b>termo em página separada</b>. Cabeçalho com logo e nome do grupo.",
-            ],
-        )
-    )
-    story.extend(shot("04_ficha_anamnese.png", "Aba 4 — Ficha de anamnese"))
-
-    story.append(PageBreak())
-    story.extend(
-        _section(
-            st,
-            "6. Instalação e compilação",
-            [
-                "<b>Executável:</b> <font face='Courier'>dist\\RoteiroTurismo.exe</font> "
-                "(ícone do logo, versão 1.1 nas propriedades do arquivo).",
-                "<b>Compilar:</b> feche o app e execute "
-                "<font face='Courier'>powershell -File scripts\\build_desktop.ps1</font>.",
-                "<b>Chave Google Maps (opcional):</b> arquivo "
-                "<font face='Courier'>google_maps_api_key.txt</font> para miniaturas Static Maps; "
-                "sem chave, usa OpenStreetMap.",
-            ],
-        )
-    )
-    story.extend(
-        _section(
-            st,
-            "7. Solução de problemas",
-            [
-                "• <b>Campos obrigatórios:</b> complete a aba Perfil e grave na planilha.<br/>"
-                "• <b>Inventário vazio:</b> importe na aba 2.<br/>"
-                "• <b>Sem atrativos na cidade:</b> confira a coluna Cidade no Excel.<br/>"
-                "• <b>Deslocamentos iguais:</b> inclua links Maps válidos e use internet.<br/>"
-                "• <b>Erro ao compilar .exe:</b> feche o programa antes do build.",
-            ],
-        )
-    )
+    story.extend(_story_from_markdown(md_text, st, embed_screenshots=embed_screenshots))
 
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     return output_path
 
 
 def main() -> None:
-    embed = "--com-capturas" in sys.argv
+    if "--sem-capturas" in sys.argv:
+        embed = False
+    elif "--com-capturas" in sys.argv:
+        embed = True
+    else:
+        embed = _screenshots_available()
     out = build_manual_pdf(embed_screenshots=embed)
     print(f"PDF gerado: {out}")
+    print(f"Capturas embutidas: {'sim' if embed else 'não'}")
 
 
 if __name__ == "__main__":

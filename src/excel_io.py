@@ -1062,18 +1062,92 @@ def read_inventory_from_uploaded(uploaded_path: Path) -> list[Attraction]:
     return _attractions_from_rows(list(ws.iter_rows(values_only=True)))
 
 
-def import_inventory_sheet(workbook_path: Path, uploaded_path: Path) -> int:
-    """Import inventory; compact model is normalized to full sheet in the project workbook."""
-    items = read_inventory_from_uploaded(uploaded_path)
-    if not items:
-        raise ValueError("Nenhuma atração válida encontrada. Use o modelo Modelo_Inventario_Turistico.xlsx.")
-
+def save_inventory(workbook_path: Path, items: list[Attraction]) -> None:
     dst = load_workbook(workbook_path)
     if INVENTORY_SHEET in dst.sheetnames:
         del dst[INVENTORY_SHEET]
     dst_ws = dst.create_sheet(INVENTORY_SHEET)
     _write_full_inventory_sheet(dst_ws, items)
     dst.save(workbook_path)
+
+
+def _normalize_attraction_id(attr_id: str) -> str:
+    return (attr_id or "").strip().upper()
+
+
+def _attraction_dedupe_key(item: Attraction) -> tuple[str, str]:
+    city = canonical_city_name(item.cidade) or (item.cidade or "").strip().lower()
+    name = " ".join((item.nome or "").lower().split())
+    return (name, city)
+
+
+def _richer_attraction(a: Attraction, b: Attraction) -> Attraction:
+    def score(x: Attraction) -> tuple[int, int, int]:
+        return (bool(x.maps_url.strip()), bool(x.image_url.strip()), len((x.descricao or "").strip()))
+
+    return b if score(b) > score(a) else a
+
+
+@dataclass(frozen=True)
+class InventoryMergeStats:
+    before: int
+    after: int
+    removed_duplicate_ids: int
+    removed_duplicate_names: int
+
+
+def merge_inventories_deduped(
+    existing: list[Attraction],
+    incoming: list[Attraction],
+    *,
+    prefer_incoming: bool = True,
+) -> tuple[list[Attraction], InventoryMergeStats]:
+    """Une inventários e remove duplicatas por ID e por nome+cidade (catálogo remoto prevalece)."""
+    before = len(existing) + len(incoming)
+    ordered = list(existing) + list(incoming) if prefer_incoming else list(incoming) + list(existing)
+
+    by_id: dict[str, Attraction] = {}
+    removed_id = 0
+    for item in ordered:
+        nid = _normalize_attraction_id(item.id)
+        if not nid:
+            continue
+        if nid in by_id:
+            removed_id += 1
+        by_id[nid] = item
+
+    id_pass = sorted(by_id.values(), key=lambda x: x.id.upper())
+
+    by_name: dict[tuple[str, str], Attraction] = {}
+    no_name: list[Attraction] = []
+    removed_name = 0
+    for item in id_pass:
+        key = _attraction_dedupe_key(item)
+        if not key[0]:
+            no_name.append(item)
+            continue
+        if key in by_name:
+            removed_name += 1
+            by_name[key] = _richer_attraction(by_name[key], item)
+        else:
+            by_name[key] = item
+
+    merged = sorted(by_name.values(), key=lambda x: x.id.upper()) + no_name
+    stats = InventoryMergeStats(
+        before=before,
+        after=len(merged),
+        removed_duplicate_ids=removed_id,
+        removed_duplicate_names=removed_name,
+    )
+    return merged, stats
+
+
+def import_inventory_sheet(workbook_path: Path, uploaded_path: Path) -> int:
+    """Import inventory; compact model is normalized to full sheet in the project workbook."""
+    items = read_inventory_from_uploaded(uploaded_path)
+    if not items:
+        raise ValueError("Nenhuma atração válida encontrada. Use o modelo Modelo_Inventario_Turistico.xlsx.")
+    save_inventory(workbook_path, items)
     return len(items)
 
 

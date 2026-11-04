@@ -1,0 +1,5 @@
+{
+  "version": "1.1.0",
+  "inventory_url": "https://raw.githubusercontent.com/ulissestp/cuesta-do-seu-jeito/main/data/Modelo_Inventario_Turistico.xlsx",
+  "manifest_url": "https://raw.githubusercontent.com/ulissestp/cuesta-do-seu-jeito/main/data/inventario_manifest.json"
+}

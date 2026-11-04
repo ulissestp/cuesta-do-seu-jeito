@@ -11,7 +11,10 @@ a = Analysis(
     [str(project / "desktop_main.py")],
     pathex=[str(project)],
     binaries=[],
-    datas=[(str(project / "data"), "data")],
+    datas=[
+        (str(project / "data"), "data"),
+        (str(project / "docs"), "docs"),
+    ],
     hiddenimports=["openpyxl.cell._writer"],
     hookspath=[],
     hooksconfig={},
