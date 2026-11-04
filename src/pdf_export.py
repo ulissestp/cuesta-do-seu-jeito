@@ -25,6 +25,7 @@ from src.itinerary_engine import (
     DayPlan,
     ItineraryResult,
     ScheduleBlock,
+    _evening_gastronomy_options_summary,
     _fmt_time,
     _lodging_options_summary,
     day_heading,
@@ -59,11 +60,13 @@ def _kind_colors(kind: str) -> tuple[colors.Color, colors.Color]:
         return COLOR_END, COLOR_BORDER_END
     if kind == "lodging":
         return COLOR_LODGING, COLOR_BORDER_LODGING
+    if kind == "evening_dining":
+        return colors.HexColor("#FFF5F5"), colors.HexColor("#C53030")
     return COLOR_VISIT, COLOR_BORDER_VISIT
 
 
 def _time_label(block: ScheduleBlock) -> str:
-    if block.kind == "lodging" and block.start == block.end:
+    if block.kind in ("lodging", "evening_dining") and block.start == block.end:
         return "Noite"
     if block.kind == "end" and block.start == block.end:
         return _fmt_time(block.start)
@@ -191,6 +194,25 @@ def _profile_summary_table(result: ItineraryResult, body: ParagraphStyle, label:
             ]
         )
 
+    if result.evening_gastronomy_suggestions:
+        evening_html = _evening_gastronomy_options_summary(
+            result.evening_gastronomy_suggestions
+        ).replace("\n", "<br/>")
+        data.append(
+            [
+                Paragraph("<b>Sugestões para o jantar (noite, após 19h)</b>", label),
+                Paragraph("", body),
+                Paragraph("", body),
+            ]
+        )
+        data.append(
+            [
+                Paragraph(evening_html, body),
+                Paragraph("", body),
+                Paragraph("", body),
+            ]
+        )
+
     table = Table(data, colWidths=[5.6 * cm, 5.6 * cm, 5.6 * cm])
     style_commands = [
         ("BACKGROUND", (0, 0), (-1, 0), COLOR_ACCENT),
@@ -204,14 +226,22 @@ def _profile_summary_table(result: ItineraryResult, body: ParagraphStyle, label:
         ("TOPPADDING", (0, 0), (-1, -1), 6),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]
+    span_row = 4
     if result.lodging_suggestions:
-        lodging_header_row = len(data) - 2
-        lodging_body_row = len(data) - 1
         style_commands.extend(
             [
-                ("SPAN", (0, lodging_header_row), (2, lodging_header_row)),
-                ("SPAN", (0, lodging_body_row), (2, lodging_body_row)),
-                ("BACKGROUND", (0, lodging_header_row), (2, lodging_header_row), colors.HexColor("#E2E8F0")),
+                ("SPAN", (0, span_row), (2, span_row)),
+                ("SPAN", (0, span_row + 1), (2, span_row + 1)),
+                ("BACKGROUND", (0, span_row), (2, span_row), colors.HexColor("#E2E8F0")),
+            ]
+        )
+        span_row += 2
+    if result.evening_gastronomy_suggestions:
+        style_commands.extend(
+            [
+                ("SPAN", (0, span_row), (2, span_row)),
+                ("SPAN", (0, span_row + 1), (2, span_row + 1)),
+                ("BACKGROUND", (0, span_row), (2, span_row), colors.HexColor("#FED7D7")),
             ]
         )
     table.setStyle(TableStyle(style_commands))
@@ -229,6 +259,8 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
         marker = "■"
     elif block.kind == "lodging":
         marker = "☾"
+    elif block.kind == "evening_dining":
+        marker = "◈"
 
     time_cell: list = [Paragraph(f"<b>{_time_label(block)}</b>", body)]
     if block.kind in ("visit", "lunch"):
@@ -248,10 +280,11 @@ def _timeline_row(block: ScheduleBlock, body: ParagraphStyle, title: ParagraphSt
         "transit": "#718096",
         "end": "#38A169",
         "lodging": "#DD6B20",
+        "evening_dining": "#C53030",
     }
     mc = marker_colors.get(block.kind, "#3182CE")
     marker_cell = Paragraph(f'<font color="{mc}"><b>{marker}</b></font>', body)
-    if block.kind == "lodging":
+    if block.kind in ("lodging", "evening_dining"):
         content = Paragraph(f"<b>{block.title}</b>", title)
     else:
         detail_html = block.detail.replace("\n", "<br/>")

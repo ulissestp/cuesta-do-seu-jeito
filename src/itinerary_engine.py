@@ -18,6 +18,9 @@ DEFAULT_CLOSE = time(18, 0)
 MIN_VISIT_MINUTES = 45
 MAX_TRANSIT_MINUTES = 40
 LODGING_TIMELINE_TITLE = "Hospedagem"
+EVENING_DINING_START = time(19, 0)
+EVENING_DINING_TIMELINE_TITLE = "Sugestões para o jantar (após 19h)"
+EVENING_DINING_SUGGESTION_COUNT = 3
 
 
 @dataclass
@@ -26,7 +29,7 @@ class ScheduleBlock:
     end: datetime
     title: str
     detail: str
-    kind: str  # visit | transit | lunch | end | lodging
+    kind: str  # visit | transit | lunch | end | lodging | evening_dining
     maps_url: str = ""
     image_url: str = ""
 
@@ -49,6 +52,7 @@ class ItineraryResult:
     media_plog: float
     media_cohen: float
     lodging_suggestions: list[Attraction] = field(default_factory=list)
+    evening_gastronomy_suggestions: list[Attraction] = field(default_factory=list)
     fora_do_perfil: bool = False
     atrativos_fora_do_perfil: list[str] = field(default_factory=list)
 
@@ -279,6 +283,24 @@ def _open_for_lunch(attraction: Attraction, day_anchor: datetime) -> bool:
     return open_dt <= lunch_start and close_dt >= lunch_end
 
 
+def _open_for_evening_dining(attraction: Attraction, day_anchor: datetime) -> bool:
+    """Gastronomia aberta às 19h (ainda em funcionamento após 19:00)."""
+    hours = resolved_hours(attraction, day_anchor.date())
+    if not hours:
+        return False
+    open_dt = _combine(day_anchor, hours[0])
+    close_dt = _combine(day_anchor, hours[1])
+    evening = _combine(day_anchor, EVENING_DINING_START)
+    return open_dt <= evening and close_dt > evening
+
+
+def _open_on_trip_evening(attraction: Attraction, dates: list[date]) -> bool:
+    return any(
+        _open_for_evening_dining(attraction, datetime.combine(day, time(12, 0)))
+        for day in dates
+    )
+
+
 def _score_distance(a: Attraction, plog: float, cohen: float) -> float:
     return abs(a.peso_plog - plog) + abs(a.peso_cohen - cohen)
 
@@ -393,6 +415,46 @@ def _pick_lodging_suggestions(
     return picks
 
 
+def _pick_evening_gastronomy_suggestions(
+    profile: TouristProfile,
+    inventory: list[Attraction],
+    scores: GroupScores,
+    used_ids: set[str],
+    dates: list[date],
+    *,
+    count: int = EVENING_DINING_SUGGESTION_COUNT,
+) -> list[Attraction]:
+    plog, cohen = scores.media_plog, scores.media_cohen
+
+    def distance(a: Attraction) -> float:
+        return abs(a.peso_plog - plog) + abs(a.peso_cohen - cohen)
+
+    pool = [
+        a
+        for a in inventory
+        if _is_gastronomia(a)
+        and a.id not in used_ids
+        and a.capacidade >= profile.numero_pessoas
+        and _passes_fator_restritivo(a, profile, scores.fator_restritivo)
+        and _open_on_trip_evening(a, dates)
+    ]
+    if not pool:
+        return []
+
+    picks: list[Attraction] = []
+    remaining = list(pool)
+    for _ in range(min(count, len(remaining))):
+        remaining.sort(key=distance)
+        best = distance(remaining[0])
+        tier = [a for a in remaining if distance(a) <= best + 0.51]
+        if len(tier) == 1 and len(remaining) > 1:
+            tier = remaining[: min(5, len(remaining))]
+        choice = random.choice(tier)
+        picks.append(choice)
+        remaining = [a for a in remaining if a.id != choice.id]
+    return picks
+
+
 def _visit_pool(selected: list[Attraction]) -> list[Attraction]:
     non_gastro = [
         a for a in selected if not _is_gastronomia(a) and not _is_hospedagem(a)
@@ -458,6 +520,22 @@ def _lodging_options_summary(attractions: list[Attraction]) -> str:
         maps_part = _maps_plain_suffix(attraction.maps_url)
         lines.append(
             f"Opção {i}: {_visit_title(attraction)}. {attraction.descricao}{_valor_clause(attraction)}{maps_part}"
+        )
+    return "\n".join(lines)
+
+
+def _evening_gastronomy_options_summary(attractions: list[Attraction]) -> str:
+    if not attractions:
+        return "—"
+    lines = [
+        "Sugestões para o período da noite (gastronomia aberta após 19h) — "
+        "não entram na programação horária do dia."
+    ]
+    for i, attraction in enumerate(attractions, 1):
+        maps_part = _maps_plain_suffix(attraction.maps_url)
+        lines.append(
+            f"Opção {i}: {_visit_title(attraction)}. {attraction.descricao}"
+            f"{_valor_clause(attraction)}{maps_part}"
         )
     return "\n".join(lines)
 
@@ -834,6 +912,32 @@ def build_itinerary(
 
         days.append(DayPlan(day_number=day, theme=theme, blocks=blocks, service_date=day_anchor))
 
+    evening_dining = _pick_evening_gastronomy_suggestions(
+        profile, inventory, scores, used_global, dates
+    )
+    for day_plan in days:
+        if not evening_dining:
+            break
+        anchor = day_plan.service_date or _day_anchor(day_plan.day_number)
+        night_marker = _combine(anchor, time(18, 0))
+        insert_at = len(day_plan.blocks)
+        for index, block in enumerate(day_plan.blocks):
+            if block.kind == "lodging":
+                insert_at = index + 1
+                break
+            if block.kind == "end":
+                insert_at = index + 1
+        day_plan.blocks.insert(
+            insert_at,
+            ScheduleBlock(
+                start=night_marker,
+                end=night_marker,
+                title=EVENING_DINING_TIMELINE_TITLE,
+                detail="",
+                kind="evening_dining",
+            ),
+        )
+
     by_id = {a.id: a for a in inventory}
     used_attractions = [
         by_id[item_id]
@@ -861,6 +965,7 @@ def build_itinerary(
         media_plog=scores.media_plog,
         media_cohen=scores.media_cohen,
         lodging_suggestions=trip_lodging,
+        evening_gastronomy_suggestions=evening_dining,
         fora_do_perfil=bool(outside),
         atrativos_fora_do_perfil=outside_names,
     )
@@ -918,11 +1023,24 @@ def itinerary_to_markdown(result: ItineraryResult) -> str:
             "",
         ]
     )
+    if result.evening_gastronomy_suggestions:
+        lines.extend(
+            [
+                "### Quadro-resumo — Sugestões para o jantar (noite, após 19h)",
+                _evening_gastronomy_options_summary(result.evening_gastronomy_suggestions),
+                "",
+            ]
+        )
     for day in result.days:
         lines.append(f"## {day_heading(day)}")
         for block in day.blocks:
             if block.kind == "lodging" and block.start == block.end:
                 lines.append(f"**Noite — {block.title}**")
+            elif block.kind == "evening_dining" and block.start == block.end:
+                lines.append(f"**Noite — {block.title}**")
+                lines.append(
+                    _evening_gastronomy_options_summary(result.evening_gastronomy_suggestions)
+                )
             elif block.kind == "end" and block.start == block.end:
                 lines.append(f"**{_fmt_time(block.start)} — {block.title}** — {block.detail}")
             else:
