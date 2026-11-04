@@ -35,8 +35,7 @@ Guia rápido dentro do aplicativo. Manual completo: **Manual do usuário** (PDF 
 ## Aba 2 — Inventário
 
 - Colunas essenciais: horários por dia da semana e feriado, **Cidade**, **Maps** (Google Maps), **Imagem** (foto no PDF), **Ingresso** (valor opcional).
-- **Verificar atualização do inventário** (ou na abertura do programa): baixa o catálogo do GitHub, mescla na sessão e **remove duplicatas** (mesmo ID ou mesmo nome+cidade).
-- Versão aplicada fica em `output/inventario_sync.json`.
+- **Verificar atualização** (aba Inventário): confere **programa (.exe)** no GitHub Releases e **inventário** (planilha remota). Mescla só diferenças (novos/alterados) e remove duplicatas (mesmo ID ou nome+cidade). Não roda ao abrir o app.
 - Depois de gerar um roteiro, linhas usadas ficam destacadas; em **Novo ID** você pode trocar um destino e gerar de novo.
 - Sem links **Maps**, deslocamentos ficam menos precisos (o programa avisa na geração do PDF).
 

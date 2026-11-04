@@ -1092,8 +1092,91 @@ def _richer_attraction(a: Attraction, b: Attraction) -> Attraction:
 class InventoryMergeStats:
     before: int
     after: int
-    removed_duplicate_ids: int
-    removed_duplicate_names: int
+    added: int = 0
+    updated: int = 0
+    removed_duplicate_ids: int = 0
+    removed_duplicate_names: int = 0
+
+
+def _attraction_fingerprint(item: Attraction) -> tuple[Any, ...]:
+    hours = item.horarios or {}
+    hour_parts: tuple[Any, ...] = tuple(
+        (
+            key,
+            format_time_value(ab) if ab else None,
+            format_time_value(fe) if fe else None,
+        )
+        for key, (ab, fe) in sorted(hours.items())
+    )
+    return (
+        _normalize_attraction_id(item.id),
+        (item.nome or "").strip(),
+        (item.categoria or "").strip(),
+        item.capacidade,
+        round(float(item.tempo_horas or 0), 4),
+        round(float(item.peso_plog or 0), 4),
+        round(float(item.peso_cohen or 0), 4),
+        (item.descricao or "").strip(),
+        (item.cidade or "").strip(),
+        (item.maps_url or "").strip(),
+        (item.image_url or "").strip(),
+        (item.valor or "").strip(),
+        hour_parts,
+    )
+
+
+def _dedupe_inventory_by_name(items: list[Attraction]) -> tuple[list[Attraction], int]:
+    by_name: dict[tuple[str, str], Attraction] = {}
+    no_name: list[Attraction] = []
+    removed_name = 0
+    for item in sorted(items, key=lambda x: x.id.upper()):
+        key = _attraction_dedupe_key(item)
+        if not key[0]:
+            no_name.append(item)
+            continue
+        if key in by_name:
+            removed_name += 1
+            by_name[key] = _richer_attraction(by_name[key], item)
+        else:
+            by_name[key] = item
+    merged = sorted(by_name.values(), key=lambda x: x.id.upper()) + no_name
+    return merged, removed_name
+
+
+def merge_inventories_incremental(
+    existing: list[Attraction],
+    incoming: list[Attraction],
+) -> tuple[list[Attraction], InventoryMergeStats]:
+    """Aplica o catálogo remoto sobre a sessão: novos IDs, alterações e remoção de duplicatas."""
+    by_id: dict[str, Attraction] = {}
+    for item in existing:
+        nid = _normalize_attraction_id(item.id)
+        if nid:
+            by_id[nid] = item
+
+    before = len(by_id)
+    added = 0
+    updated = 0
+    for item in incoming:
+        nid = _normalize_attraction_id(item.id)
+        if not nid:
+            continue
+        if nid not in by_id:
+            by_id[nid] = item
+            added += 1
+        elif _attraction_fingerprint(by_id[nid]) != _attraction_fingerprint(item):
+            by_id[nid] = item
+            updated += 1
+
+    merged, removed_name = _dedupe_inventory_by_name(list(by_id.values()))
+    stats = InventoryMergeStats(
+        before=before,
+        after=len(merged),
+        added=added,
+        updated=updated,
+        removed_duplicate_names=removed_name,
+    )
+    return merged, stats
 
 
 def merge_inventories_deduped(

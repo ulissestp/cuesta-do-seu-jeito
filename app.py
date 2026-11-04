@@ -41,7 +41,7 @@ from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 from src.roteiro_service import gerar_roteiro_da_planilha
 from src.session_store import load_last_workbook, remember_workbook
 from src.help_docs import load_help_markdown, user_manual_md_path, user_manual_pdf_path
-from src.inventory_sync import check_and_apply_inventory_update, load_local_inventory_version
+from src.inventory_sync import load_local_inventory_version, verify_updates
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -64,20 +64,6 @@ def _init_state() -> None:
         st.session_state.itinerary_result = None
     if "last_anamnese_pdf" not in st.session_state:
         st.session_state.last_anamnese_pdf = None
-    if "inventory_sync_checked" not in st.session_state:
-        st.session_state.inventory_sync_checked = False
-
-
-def _run_inventory_sync_once() -> None:
-    if st.session_state.inventory_sync_checked:
-        return
-    st.session_state.inventory_sync_checked = True
-    with st.spinner("Verificando atualização do inventário no GitHub…"):
-        result = check_and_apply_inventory_update(st.session_state.workbook_path)
-    if result.status == "updated":
-        st.success(result.message)
-    elif result.status == "error":
-        st.warning(result.message)
 
 
 def _show_scores_panel(profile: TouristProfile) -> None:
@@ -199,18 +185,20 @@ def step_inventory() -> None:
     st.subheader("2. Inventário turístico")
     ver = load_local_inventory_version()
     st.caption(
-        f"Catálogo local: versão **{ver or 'ainda não sincronizado'}**. "
-        "Duplicatas (mesmo ID ou mesmo nome+cidade) são removidas ao atualizar."
+        f"Catálogo sincronizado: **{ver or 'ainda não verificado'}**. "
+        "Use **Verificar atualização** para conferir o .exe e o inventário no GitHub "
+        "(atualização incremental, sem duplicatas)."
     )
-    if st.button("Verificar atualização do inventário"):
-        with st.spinner("Baixando catálogo e mesclando…"):
-            result = check_and_apply_inventory_update(st.session_state.workbook_path)
-        if result.status == "updated":
-            st.success(result.message)
-        elif result.status == "up_to_date":
-            st.info(result.message)
+    if st.button("Verificar atualização"):
+        with st.spinner("Verificando programa e inventário…"):
+            result = verify_updates(st.session_state.workbook_path)
+        st.info(result.app.message)
+        if result.inventory.status == "updated":
+            st.success(result.inventory.message)
+        elif result.inventory.status == "up_to_date":
+            st.success(result.inventory.message)
         else:
-            st.warning(result.message)
+            st.warning(result.inventory.message)
         st.rerun()
     st.caption(
         "Modelo com **11 colunas** (… descrição e **Cidade** na coluna K). "
@@ -369,7 +357,6 @@ def _score_form_index(value: int) -> int:
 def main() -> None:
     st.set_page_config(page_title=desktop_window_title(), page_icon="🧭", layout="wide")
     _init_state()
-    _run_inventory_sync_once()
 
     st.title(f"🧭 {desktop_window_title()}")
     st.markdown("Perfil → inventário → **score automático (seção 4)** → PDF do roteiro → **ficha anamnese**.")

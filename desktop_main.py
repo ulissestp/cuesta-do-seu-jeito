@@ -54,11 +54,7 @@ from src.pdf_export import build_pdf, roteiro_pdf_filename
 from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 from src.roteiro_service import gerar_roteiro_da_planilha
 from src.help_docs import load_help_markdown, user_manual_md_path, user_manual_pdf_path
-from src.inventory_sync import (
-    InventoryUpdateResult,
-    check_and_apply_inventory_update,
-    load_local_inventory_version,
-)
+from src.inventory_sync import VerifyUpdatesResult, load_local_inventory_version, verify_updates
 
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
@@ -262,6 +258,7 @@ class RoteiroDesktopApp(ctk.CTk):
         self.last_pdf: Path | None = None
         self.last_anamnese_pdf: Path | None = None
         self._pdf_job_running = False
+        self._verify_job_running = False
         self.itinerary_result = None
         self._used_order: list[str] = []
         self._novo_ids: dict[str, str] = {}
@@ -276,42 +273,43 @@ class RoteiroDesktopApp(ctk.CTk):
         self._build_header()
         self._build_tabs()
         self._load_profile_into_form()
-        self.after(600, self._schedule_inventory_sync_check)
 
-    def _schedule_inventory_sync_check(self) -> None:
-        threading.Thread(target=self._inventory_sync_worker, daemon=True).start()
-
-    def _inventory_sync_worker(self) -> None:
-        try:
-            result = check_and_apply_inventory_update(self.workbook_path)
-        except Exception as exc:
-            result = InventoryUpdateResult(
-                status="error",
-                message=str(exc),
-                local_version=load_local_inventory_version(),
-            )
-        self.after(0, lambda r=result: self._finish_inventory_sync(r))
-
-    def _finish_inventory_sync(self, result) -> None:
+    def _finish_verify_updates(self, result: VerifyUpdatesResult) -> None:
         if hasattr(self, "inv_sync_label"):
-            if result.status == "up_to_date":
-                self.inv_sync_label.configure(
-                    text=f"Catálogo v{result.remote_version or result.local_version or '—'}"
-                )
-            elif result.status == "updated":
-                self.inv_sync_label.configure(text=result.message[:120])
-                self._refresh_inventory_table()
-                messagebox.showinfo("Inventário atualizado", result.message)
-            elif result.status == "offline":
-                ver = load_local_inventory_version() or "local"
-                self.inv_sync_label.configure(text=f"Catálogo {ver} (sem verificação online)")
-            else:
-                self.inv_sync_label.configure(text=result.message[:120])
+            self.inv_sync_label.configure(text=result.inventory.message[:160])
+        if result.inventory.status in ("updated", "up_to_date"):
+            self._refresh_inventory_table()
+        messagebox.showinfo("Verificar atualização", result.summary)
 
-    def _check_inventory_update_manual(self) -> None:
-        self.inv_sync_label.configure(text="Verificando atualização do inventário…")
+    def _verify_updates_manual(self) -> None:
+        if getattr(self, "_verify_job_running", False):
+            return
+        self._verify_job_running = True
+        self.inv_sync_label.configure(text="Verificando programa e inventário…")
         self.update_idletasks()
-        self._schedule_inventory_sync_check()
+
+        def worker() -> None:
+            try:
+                outcome = verify_updates(self.workbook_path)
+            except Exception as exc:
+                from src.app_update import AppUpdateResult
+                from src.inventory_sync import InventoryUpdateResult
+
+                outcome = VerifyUpdatesResult(
+                    app=AppUpdateResult(status="error", message=str(exc), current_version=""),
+                    inventory=InventoryUpdateResult(
+                        status="error",
+                        message="Inventário: verificação não concluída.",
+                    ),
+                )
+
+            def finish() -> None:
+                self._verify_job_running = False
+                self._finish_verify_updates(outcome)
+
+            self.after(0, finish)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _build_header(self) -> None:
         header = ctk.CTkFrame(self, corner_radius=0)
@@ -587,8 +585,8 @@ class RoteiroDesktopApp(ctk.CTk):
         )
         ctk.CTkButton(
             top,
-            text="Verificar atualização do inventário",
-            command=self._check_inventory_update_manual,
+            text="Verificar atualização",
+            command=self._verify_updates_manual,
         ).pack(side="left", padx=8)
         self.inv_count_label = ctk.CTkLabel(top, text="")
         self.inv_count_label.pack(side="left", padx=12)
