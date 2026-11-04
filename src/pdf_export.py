@@ -25,7 +25,6 @@ from src.itinerary_engine import (
     DayPlan,
     ItineraryResult,
     ScheduleBlock,
-    _evening_gastronomy_options_summary,
     _fmt_time,
     _lodging_options_summary,
     day_heading,
@@ -196,25 +195,6 @@ def _profile_summary_table(result: ItineraryResult, body: ParagraphStyle, label:
             ]
         )
 
-    if result.evening_gastronomy_suggestions:
-        evening_html = _evening_gastronomy_options_summary(
-            result.evening_gastronomy_suggestions
-        ).replace("\n", "<br/>")
-        data.append(
-            [
-                Paragraph("<b>Sugestões para o jantar (noite, após 19h)</b>", label),
-                Paragraph("", body),
-                Paragraph("", body),
-            ]
-        )
-        data.append(
-            [
-                Paragraph(evening_html, body),
-                Paragraph("", body),
-                Paragraph("", body),
-            ]
-        )
-
     table = Table(data, colWidths=[5.6 * cm, 5.6 * cm, 5.6 * cm])
     style_commands = [
         ("BACKGROUND", (0, 0), (-1, 0), COLOR_ACCENT),
@@ -235,15 +215,6 @@ def _profile_summary_table(result: ItineraryResult, body: ParagraphStyle, label:
                 ("SPAN", (0, span_row), (2, span_row)),
                 ("SPAN", (0, span_row + 1), (2, span_row + 1)),
                 ("BACKGROUND", (0, span_row), (2, span_row), colors.HexColor("#E2E8F0")),
-            ]
-        )
-        span_row += 2
-    if result.evening_gastronomy_suggestions:
-        style_commands.extend(
-            [
-                ("SPAN", (0, span_row), (2, span_row)),
-                ("SPAN", (0, span_row + 1), (2, span_row + 1)),
-                ("BACKGROUND", (0, span_row), (2, span_row), colors.HexColor("#FED7D7")),
             ]
         )
     table.setStyle(TableStyle(style_commands))

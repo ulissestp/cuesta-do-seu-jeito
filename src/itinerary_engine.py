@@ -20,7 +20,7 @@ MAX_TRANSIT_MINUTES = 40
 LODGING_TIMELINE_TITLE = "Hospedagem"
 EVENING_DINING_START = time(19, 0)
 EVENING_DINING_TIMELINE_TITLE = "Sugestões para o jantar (após 19h)"
-EVENING_DINING_SUGGESTION_COUNT = 3
+EVENING_DINING_SUGGESTION_COUNT = 2
 
 
 @dataclass
@@ -52,7 +52,6 @@ class ItineraryResult:
     media_plog: float
     media_cohen: float
     lodging_suggestions: list[Attraction] = field(default_factory=list)
-    evening_gastronomy_suggestions: list[Attraction] = field(default_factory=list)
     fora_do_perfil: bool = False
     atrativos_fora_do_perfil: list[str] = field(default_factory=list)
 
@@ -524,23 +523,6 @@ def _lodging_options_summary(attractions: list[Attraction]) -> str:
     return "\n".join(lines)
 
 
-def _evening_gastronomy_options_summary(attractions: list[Attraction]) -> str:
-    if not attractions:
-        return "—"
-    lines = [
-        "Sugestões para o jantar (gastronomia aberta às 19h ou depois). "
-        "As opções entram na linha do tempo após a hospedagem, "
-        "sem deslocamento roteirizado entre elas."
-    ]
-    for i, attraction in enumerate(attractions, 1):
-        maps_part = _maps_plain_suffix(attraction.maps_url)
-        lines.append(
-            f"Opção {i}: {_visit_title(attraction)}. {attraction.descricao}"
-            f"{_valor_clause(attraction)}{maps_part}"
-        )
-    return "\n".join(lines)
-
-
 def _evening_dining_detail(attraction: Attraction) -> str:
     return (
         f"Sugestão para o jantar. Cidade: {_city_label(attraction)}. "
@@ -562,7 +544,7 @@ def _insert_evening_dining_timeline_blocks(
             start=marker,
             end=marker,
             title=EVENING_DINING_TIMELINE_TITLE,
-            detail="Três opções abaixo — sem deslocamento entre as sugestões.",
+            detail="Opções abaixo — sem deslocamento entre as sugestões.",
             kind="evening_dining",
         )
     ]
@@ -826,6 +808,7 @@ def build_itinerary(
 
     days: list[DayPlan] = []
     used_global: set[str] = set()
+    used_evening: set[str] = set()
     trip_lodging = _pick_lodging_suggestions(profile, inventory, scores)
 
     for day, service_date in enumerate(dates, start=1):
@@ -952,22 +935,27 @@ def build_itinerary(
                 )
             )
 
-        days.append(DayPlan(day_number=day, theme=theme, blocks=blocks, service_date=day_anchor))
+        evening_dining = _pick_evening_gastronomy_suggestions(
+            profile,
+            inventory,
+            scores,
+            used_global | used_evening,
+            [service_date],
+        )
+        if evening_dining:
+            insert_at = len(blocks)
+            for index, block in enumerate(blocks):
+                if block.kind == "lodging":
+                    insert_at = index + 1
+                    break
+                if block.kind == "end":
+                    insert_at = index + 1
+            _insert_evening_dining_timeline_blocks(
+                blocks, insert_at, day_anchor, evening_dining
+            )
+            used_evening.update(a.id for a in evening_dining)
 
-    evening_dining = _pick_evening_gastronomy_suggestions(
-        profile, inventory, scores, used_global, dates
-    )
-    if days and evening_dining:
-        day_plan = days[0]
-        anchor = day_plan.service_date or _day_anchor(day_plan.day_number)
-        insert_at = len(day_plan.blocks)
-        for index, block in enumerate(day_plan.blocks):
-            if block.kind == "lodging":
-                insert_at = index + 1
-                break
-            if block.kind == "end":
-                insert_at = index + 1
-        _insert_evening_dining_timeline_blocks(day_plan.blocks, insert_at, anchor, evening_dining)
+        days.append(DayPlan(day_number=day, theme=theme, blocks=blocks, service_date=day_anchor))
 
     by_id = {a.id: a for a in inventory}
     used_attractions = [
@@ -996,7 +984,6 @@ def build_itinerary(
         media_plog=scores.media_plog,
         media_cohen=scores.media_cohen,
         lodging_suggestions=trip_lodging,
-        evening_gastronomy_suggestions=evening_dining,
         fora_do_perfil=bool(outside),
         atrativos_fora_do_perfil=outside_names,
     )
@@ -1054,14 +1041,6 @@ def itinerary_to_markdown(result: ItineraryResult) -> str:
             "",
         ]
     )
-    if result.evening_gastronomy_suggestions:
-        lines.extend(
-            [
-                "### Quadro-resumo — Sugestões para o jantar (noite, após 19h)",
-                _evening_gastronomy_options_summary(result.evening_gastronomy_suggestions),
-                "",
-            ]
-        )
     for day in result.days:
         lines.append(f"## {day_heading(day)}")
         for block in day.blocks:
