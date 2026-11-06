@@ -21,19 +21,24 @@ from src.app_icon import ensure_app_icon
 from src.branding import desktop_header_text, desktop_window_title
 from src.excel_io import (
     COHEN_QUESTIONS,
+    CATEGORIAS_PASSEIO,
     CIDADES_ROTEIRO,
     PLOG_QUESTIONS,
     TouristProfile,
     compute_group_scores,
     create_inventory_template,
     default_workbook_path,
+    resolve_inventory_template,
     inventory_template_path,
     initialize_session_workbook,
     clear_profile_only,
+    filter_inventory_by_categories,
     filter_inventory_by_cities,
     import_inventory_sheet,
     inventory_maps_coverage,
     read_inventory,
+    duplicate_attraction_ids,
+    duplicate_ids_message,
     read_profile,
     save_profile,
     validate_profile_for_roteiro,
@@ -268,6 +273,7 @@ class RoteiroDesktopApp(ctk.CTk):
         self.plog_combos: dict[str, ctk.CTkComboBox] = {}
         self.cohen_combos: dict[str, ctk.CTkComboBox] = {}
         self.cidade_vars: dict[str, tk.BooleanVar] = {}
+        self.categoria_vars: dict[str, tk.BooleanVar] = {}
 
         self._build_menu()
         self._build_header()
@@ -489,8 +495,34 @@ class RoteiroDesktopApp(ctk.CTk):
                 variable=var,
             ).pack(side="left", padx=(0, 20))
 
+        ctk.CTkLabel(scroll, text="Categorias de passeio", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", pady=(12, 4)
+        )
+        ctk.CTkLabel(
+            scroll,
+            text=(
+                "Marque uma ou mais categorias. O roteiro usa somente atrativos dessas categorias. "
+                "Pelo menos uma é obrigatória."
+            ),
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            wraplength=900,
+        ).pack(anchor="w", pady=(0, 6))
+        categories = ctk.CTkFrame(scroll, fg_color="transparent")
+        categories.pack(anchor="w", pady=(0, 4))
+        for idx, category in enumerate(CATEGORIAS_PASSEIO):
+            var = tk.BooleanVar(value=False)
+            self.categoria_vars[category] = var
+            ctk.CTkCheckBox(categories, text=category, variable=var, height=22).grid(
+                row=idx // 3,
+                column=idx % 3,
+                sticky="w",
+                padx=(0, 14),
+                pady=1,
+            )
+
         ctk.CTkLabel(scroll, text="2. Eixo Plog (1 a 5)", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", pady=(16, 6)
+            anchor="w", pady=(10, 2)
         )
         ctk.CTkLabel(
             scroll,
@@ -498,11 +530,10 @@ class RoteiroDesktopApp(ctk.CTk):
             font=ctk.CTkFont(size=12),
             text_color="gray",
         ).pack(anchor="w", pady=(0, 4))
-        for q in PLOG_QUESTIONS:
-            self._score_row(scroll, q, self.plog_combos)
+        self._score_block(scroll, PLOG_QUESTIONS, self.plog_combos)
 
         ctk.CTkLabel(scroll, text="3. Eixo Cohen (1 a 5)", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", pady=(16, 6)
+            anchor="w", pady=(8, 2)
         )
         ctk.CTkLabel(
             scroll,
@@ -510,8 +541,7 @@ class RoteiroDesktopApp(ctk.CTk):
             font=ctk.CTkFont(size=12),
             text_color="gray",
         ).pack(anchor="w", pady=(0, 4))
-        for q in COHEN_QUESTIONS:
-            self._score_row(scroll, q, self.cohen_combos)
+        self._score_block(scroll, COHEN_QUESTIONS, self.cohen_combos)
 
         ctk.CTkButton(scroll, text="Gravar na planilha", command=self._save_profile).pack(
             anchor="w", pady=16
@@ -534,45 +564,34 @@ class RoteiroDesktopApp(ctk.CTk):
         combo.grid(row=row, column=col + 1, sticky="ew", pady=6)
         return combo
 
-    def _score_row(self, parent, question, store: dict[str, ctk.CTkComboBox]) -> None:
-        block = ctk.CTkFrame(parent, corner_radius=8)
-        block.pack(fill="x", pady=6, padx=2)
-
-        qid = question.id
-        top = ctk.CTkFrame(block, fg_color="transparent")
-        top.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkLabel(
-            top,
-            text=f"{qid}: {question.pergunta}",
-            anchor="w",
-            wraplength=780,
-            font=ctk.CTkFont(weight="bold"),
-        ).pack(side="left", fill="x", expand=True)
-
-        ctk.CTkLabel(top, text="Nota:", width=40).pack(side="right", padx=(8, 4))
-        combo = ctk.CTkComboBox(top, values=SCORE_FORM_OPCOES, width=70, state="readonly")
-        combo.set(FORM_BLANK)
-        combo.pack(side="right")
-        store[qid] = combo
-
-        hints = ctk.CTkFrame(block, fg_color="transparent")
-        hints.pack(fill="x", padx=10, pady=(0, 10))
-        ctk.CTkLabel(
-            hints,
-            text=f"1 → {question.significado_nota_1}",
-            anchor="w",
-            wraplength=880,
-            font=ctk.CTkFont(size=11),
-            text_color="#2B6CB0",
-        ).pack(fill="x")
-        ctk.CTkLabel(
-            hints,
-            text=f"5 → {question.significado_nota_5}",
-            anchor="w",
-            wraplength=880,
-            font=ctk.CTkFont(size=11),
-            text_color="#2F855A",
-        ).pack(fill="x")
+    def _score_block(self, parent, questions, store: dict[str, ctk.CTkComboBox]) -> None:
+        grid = ctk.CTkFrame(parent, fg_color="transparent")
+        grid.pack(anchor="w", pady=(0, 2))
+        grid.columnconfigure(0, minsize=460)
+        for index, question in enumerate(questions):
+            row = index * 2
+            ctk.CTkLabel(
+                grid,
+                text=f"{question.id}: {question.pergunta}",
+                anchor="w",
+                font=ctk.CTkFont(weight="bold"),
+            ).grid(row=row, column=0, sticky="w", pady=(2, 0))
+            ctk.CTkLabel(grid, text="Nota", width=36, anchor="e").grid(
+                row=row, column=1, sticky="e", padx=(12, 4)
+            )
+            combo = ctk.CTkComboBox(
+                grid, values=SCORE_FORM_OPCOES, width=64, height=26, state="readonly"
+            )
+            combo.set(FORM_BLANK)
+            combo.grid(row=row, column=2, sticky="w")
+            store[question.id] = combo
+            ctk.CTkLabel(
+                grid,
+                text=f"1 → {question.significado_nota_1}    5 → {question.significado_nota_5}",
+                anchor="w",
+                font=ctk.CTkFont(size=11),
+                text_color="gray",
+            ).grid(row=row + 1, column=0, columnspan=3, sticky="w", pady=(0, 2))
 
     def _build_inventory_tab(self, parent: ctk.CTkFrame) -> None:
         top = ctk.CTkFrame(parent, fg_color="transparent")
@@ -613,7 +632,7 @@ class RoteiroDesktopApp(ctk.CTk):
         table_frame = ctk.CTkFrame(parent)
         table_frame.pack(fill="both", expand=True, pady=8)
 
-        cols = ("novo_id", "id", "nome", "categoria", "descricao")
+        cols = ("novo_id", "id", "nome", "categoria", "cidade", "tempo", "ingresso", "descricao")
         style = ttk.Style(self)
 
         def _tag_friendly(option: str) -> list:
@@ -638,17 +657,33 @@ class RoteiroDesktopApp(ctk.CTk):
             "id": "ID",
             "nome": "Nome da atração",
             "categoria": "Categoria",
+            "cidade": "Cidade",
+            "tempo": "Tempo médio",
+            "ingresso": "Ingresso",
             "descricao": "Descrição breve",
         }
-        widths = {"novo_id": 90, "id": 80, "nome": 260, "categoria": 150, "descricao": 420}
+        widths = {
+            "novo_id": 90,
+            "id": 80,
+            "nome": 260,
+            "categoria": 150,
+            "cidade": 120,
+            "tempo": 110,
+            "ingresso": 120,
+            "descricao": 420,
+        }
         for c, title in headings.items():
             self.tree.heading(c, text=title)
-            self.tree.column(c, width=widths[c], minwidth=60, stretch=c == "descricao", anchor="w")
+            self.tree.column(c, width=widths[c], minwidth=60, stretch=False, anchor="w")
         self.tree.bind("<ButtonRelease-1>", self._start_novo_id_edit)
         scroll_y = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll_y.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scroll_y.pack(side="right", fill="y")
+        scroll_x = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        scroll_y.grid(row=0, column=1, sticky="ns")
+        scroll_x.grid(row=1, column=0, sticky="ew")
         self._refresh_inventory_table()
 
     def _build_pdf_tab(self, parent: ctk.CTkFrame) -> None:
@@ -742,6 +777,8 @@ class RoteiroDesktopApp(ctk.CTk):
         self.ritmo_combo.set(FORM_BLANK)
         for var in self.cidade_vars.values():
             var.set(False)
+        for var in self.categoria_vars.values():
+            var.set(False)
         for q in PLOG_QUESTIONS:
             self.plog_combos[q.id].set(FORM_BLANK)
         for q in COHEN_QUESTIONS:
@@ -760,6 +797,8 @@ class RoteiroDesktopApp(ctk.CTk):
         self.ritmo_combo.set(RITMO_FORM_OPCOES[_index_or_zero(RITMO_FORM_OPCOES, profile.ritmo)])
         for city, var in self.cidade_vars.items():
             var.set(city in profile.cidades)
+        for category, var in self.categoria_vars.items():
+            var.set(category in profile.categorias)
         for qid, combo in self.plog_combos.items():
             combo.set(_score_display(int(profile.plog_scores.get(qid, 0))))
         for qid, combo in self.cohen_combos.items():
@@ -781,6 +820,9 @@ class RoteiroDesktopApp(ctk.CTk):
             perfil_predominante=normalize_form_choice(self.perfil_combo.get()),
             ritmo=normalize_form_choice(self.ritmo_combo.get()),
             cidades=[city for city, var in self.cidade_vars.items() if var.get()],
+            categorias=[
+                category for category, var in self.categoria_vars.items() if var.get()
+            ],
             plog_scores={qid: _parse_score_field(combo.get()) for qid, combo in self.plog_combos.items()},
             cohen_scores={qid: _parse_score_field(combo.get()) for qid, combo in self.cohen_combos.items()},
         )
@@ -804,7 +846,7 @@ class RoteiroDesktopApp(ctk.CTk):
         messagebox.showinfo("Salvo", "Perfil gravado na planilha.")
 
     def _save_inventory_template(self) -> None:
-        create_inventory_template(inventory_template_path(ROOT))
+        source = resolve_inventory_template() or create_inventory_template(inventory_template_path(ROOT))
         dest = filedialog.asksaveasfilename(
             title="Salvar modelo de inventário",
             defaultextension=".xlsx",
@@ -813,7 +855,7 @@ class RoteiroDesktopApp(ctk.CTk):
         )
         if not dest:
             return
-        shutil.copy2(inventory_template_path(ROOT), dest)
+        shutil.copy2(source, dest)
         messagebox.showinfo("Modelo", f"Modelo salvo em:\n{dest}")
 
     def _import_inventory(self) -> None:
@@ -844,6 +886,11 @@ class RoteiroDesktopApp(ctk.CTk):
         for item in self.tree.get_children():
             self.tree.delete(item)
         items = read_inventory(self.workbook_path)
+        duplicated = duplicate_attraction_ids(items)
+        if duplicated:
+            blocked = {item_id.strip().upper() for item_id in duplicated}
+            items = [item for item in items if item.id.strip().upper() not in blocked]
+            messagebox.showwarning("IDs duplicados", duplicate_ids_message(duplicated))
         used = set(self._used_order)
         items.sort(key=lambda attraction: (attraction.id not in used, attraction.id))
         for attraction in items:
@@ -857,6 +904,9 @@ class RoteiroDesktopApp(ctk.CTk):
                     attraction.id,
                     attraction.nome,
                     attraction.categoria or "—",
+                    attraction.cidade or "—",
+                    f"{attraction.tempo_horas:g} h" if attraction.tempo_horas else "—",
+                    attraction.valor or "—",
                     attraction.descricao or "—",
                 ),
             )
@@ -869,7 +919,10 @@ class RoteiroDesktopApp(ctk.CTk):
 
     def _novo_id_choices(self, current_id: str) -> list[str]:
         options = ["— manter o ID —"]
-        for attraction in read_inventory(self.workbook_path):
+        profile = self._profile_from_form()
+        inventory = filter_inventory_by_cities(read_inventory(self.workbook_path), profile.cidades)
+        inventory = filter_inventory_by_categories(inventory, profile.categorias)
+        for attraction in inventory:
             if attraction.id == current_id:
                 continue
             if "hospedagem" in attraction.categoria.lower():
@@ -935,6 +988,7 @@ class RoteiroDesktopApp(ctk.CTk):
         self._close_novo_id_edit(save=True)
         profile = self._profile_from_form()
         inventory = filter_inventory_by_cities(read_inventory(self.workbook_path), profile.cidades)
+        inventory = filter_inventory_by_categories(inventory, profile.categorias)
         by_id = {attraction.id: attraction for attraction in inventory}
         chosen: list[str] = []
         seen: set[str] = set()
@@ -943,11 +997,11 @@ class RoteiroDesktopApp(ctk.CTk):
             attraction = by_id.get(target)
             if attraction is None:
                 raise ValueError(
-                    f"O ID '{target}' não está no inventário das cidades marcadas no perfil."
+                    f"O ID '{target}' não está nas cidades e categorias marcadas no perfil."
                 )
             if "hospedagem" in attraction.categoria.lower():
                 raise ValueError(
-                    f"{target} é hospedagem. Informe o ID de um atrativo ou de uma gastronomia."
+                    f"{target} é hospedagem. Informe o ID de um atrativo ou de uma refeição."
                 )
             if target in seen:
                 raise ValueError(f"O ID {target} ficou repetido na nova seleção.")
@@ -972,7 +1026,7 @@ class RoteiroDesktopApp(ctk.CTk):
                     "Links do Google Maps ausentes",
                     "O inventário desta sessão não tem links na coluna Maps.\n\n"
                     "Na etapa 2, importe de novo o arquivo "
-                    "Modelo_Inventario_Turistico.xlsx (Desktop → PROJETO INTEGRADOR).\n\n"
+                    "Modelo_Inventario_Turistico.xlsx (Desktop).\n\n"
                     "Gerar o PDF mesmo assim, sem links no roteiro?",
                 )
                 if not proceed:

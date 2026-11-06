@@ -176,6 +176,15 @@ def _profile_summary_table(result: ItineraryResult, body: ParagraphStyle, label:
                 body,
             ),
         ],
+        [
+            Paragraph(
+                "<b>Categorias de passeio</b><br/>"
+                + (", ".join(p.categorias) if p.categorias else "—"),
+                body,
+            ),
+            Paragraph("", body),
+            Paragraph("", body),
+        ],
     ]
 
     if result.lodging_suggestions:
@@ -208,7 +217,8 @@ def _profile_summary_table(result: ItineraryResult, body: ParagraphStyle, label:
         ("TOPPADDING", (0, 0), (-1, -1), 6),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]
-    span_row = 4
+    style_commands.append(("SPAN", (0, 4), (2, 4)))
+    span_row = 5
     if result.lodging_suggestions:
         style_commands.extend(
             [

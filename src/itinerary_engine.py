@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
 from src.brazil_holidays import is_brazilian_holiday
-from src.excel_io import Attraction, TouristProfile, canonical_city_name, trip_dates
+from src.excel_io import Attraction, TouristProfile, canonical_city_name, is_meal_gastronomy, trip_dates
 from src.opening_hours import resolved_hours
 from src.geo_distance import GeoContext, LatLng, haversine_km, travel_minutes_between
 from src.group_scores import GroupScores, build_technical_analysis
@@ -71,7 +71,7 @@ def _passes_fator_restritivo(attraction: Attraction, profile: TouristProfile, fa
 
 
 def _is_gastronomia(attraction: Attraction) -> bool:
-    return "gastronomia" in attraction.categoria.lower()
+    return is_meal_gastronomy(attraction.categoria)
 
 
 def _is_hospedagem(attraction: Attraction) -> bool:
@@ -283,7 +283,7 @@ def _open_for_lunch(attraction: Attraction, day_anchor: datetime) -> bool:
 
 
 def _open_for_evening_dining(attraction: Attraction, day_anchor: datetime) -> bool:
-    """Gastronomia aberta às 19h (ainda em funcionamento após 19:00)."""
+    """Refeição aberta às 19h (ainda em funcionamento após 19:00)."""
     hours = resolved_hours(attraction, day_anchor.date())
     if not hours:
         return False
@@ -461,12 +461,24 @@ def _visit_pool(selected: list[Attraction]) -> list[Attraction]:
     return non_gastro or list(selected)
 
 
+def _theme_category(categoria: str) -> str:
+    text = (categoria or "").strip()
+    if text.lower().replace(" ", "").startswith("gastronomia/"):
+        return text
+    head = text.split("/")[0].strip()
+    return head or "Passeio"
+
+
 def _theme_for_day(attractions: list[Attraction]) -> str:
-    if not attractions:
+    visits = [a for a in attractions if not _is_gastronomia(a) and not _is_hospedagem(a)]
+    source = visits or attractions
+    if not source:
         return "Exploração local"
-    cats = {a.categoria.split("/")[0].strip() for a in attractions}
+    cats = {_theme_category(a.categoria) for a in source if (a.categoria or "").strip()}
+    if not cats:
+        return "Exploração local"
     if len(cats) == 1:
-        return list(cats)[0]
+        return next(iter(cats))
     return " e ".join(sorted(cats)[:2])
 
 
@@ -877,7 +889,7 @@ def build_itinerary(
             lunch_title = "Pausa para Almoço"
             lunch_detail = (
                 "Pausa de 1h30min entre 12h00 e 13h30. "
-                "Nenhuma gastronomia em funcionamento a até 40 minutos de deslocamento neste dia."
+                "Nenhuma refeição em funcionamento a até 40 minutos de deslocamento neste dia."
             )
         blocks.append(
             ScheduleBlock(
@@ -1032,6 +1044,7 @@ def itinerary_to_markdown(result: ItineraryResult) -> str:
             else ""
         ),
         f"Média Plog: {s.media_plog:.2f} | Média Cohen: {s.media_cohen:.2f} | Fator: {s.fator_restritivo}",
+        f"Categorias: {', '.join(p.categorias) if p.categorias else '—'}",
         "",
     ]
     lines.extend(

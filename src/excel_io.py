@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,43 @@ FULL_INVENTORY_HEADERS = (
     "Ingresso",
 )
 
+# Colunas gravadas no inventário da sessão e no modelo para download.
+INVENTORY_BASE_HEADERS = (
+    "ID",
+    "Nome da Atração",
+    "Categoria",
+    "Capacidade Máx. Grupo (Pessoas)",
+    "Tempo Médio (horas)",
+    "Peso Plog (Aventura)",
+    "Peso Cohen (Independência)",
+    "Descrição Breve",
+    "Cidade",
+    "Maps",
+    "Imagem",
+    "Ingresso",
+)
+INVENTORY_DAY_LABELS = (
+    "Segunda",
+    "Terça",
+    "Quarta",
+    "Quinta",
+    "Sexta",
+    "Sábado",
+    "Domingo",
+    "Feriado",
+)
+
 CIDADES_ROTEIRO = ("Botucatu", "Pardinho", "Bofete")
+
+CATEGORIAS_PASSEIO = (
+    "Ecoturismo",
+    "Cultura",
+    "Compras",
+    "Gastronomia",
+    "Aventura",
+    "Histórico",
+    "Cultura/Religioso",
+)
 
 
 @dataclass(frozen=True)
@@ -159,6 +196,7 @@ class TouristProfile:
     cohen_scores: dict[str, int]
     check_in: date | None = None
     check_out: date | None = None
+    categorias: list[str] = field(default_factory=list)
 
     @property
     def media_plog(self) -> float:
@@ -227,6 +265,77 @@ def serialize_cidades_selecionadas(cidades: list[str]) -> str:
     return ", ".join(ordered)
 
 
+def _categoria_key(raw: str) -> str:
+    text = _normalize_header_cell(raw)
+    text = text.replace(" / ", "/").replace(" /", "/").replace("/ ", "/")
+    if text == "cultural":
+        return "cultura"
+    if text in {"religioso", "cultura/religioso", "historico/religioso"}:
+        return "cultura/religioso"
+    if text in {"gastronomia/cultural", "refeicao/cultural"}:
+        return "gastronomia"
+    return text
+
+
+def parse_categorias_selecionadas(raw: Any) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    by_key = {_categoria_key(item): item for item in CATEGORIAS_PASSEIO}
+    selected: list[str] = []
+    for part in text.replace(";", ",").split(","):
+        canon = by_key.get(_categoria_key(part))
+        if canon and canon not in selected:
+            selected.append(canon)
+    return selected
+
+
+def serialize_categorias_selecionadas(categorias: list[str]) -> str:
+    ordered = [item for item in CATEGORIAS_PASSEIO if item in categorias]
+    return ", ".join(ordered)
+
+
+def is_meal_gastronomy(categoria: str) -> bool:
+    """Refeição é só almoço e jantar. Gastronomia é passeio."""
+    return _categoria_key(categoria) == "refeicao"
+
+
+def _categoria_fixa_do_roteiro(categoria: str) -> bool:
+    """Hospedagem e refeição entram no roteiro sem aparecer na escolha do perfil."""
+    key = _categoria_key(categoria)
+    if key in {_categoria_key(item) for item in CATEGORIAS_PASSEIO}:
+        return False
+    parts = key.split("/")
+    return any(part in {"hospedagem", "refeicao"} for part in parts)
+
+
+def attraction_in_selected_categories(categoria: str, categorias: list[str]) -> bool:
+    """Casa a categoria do inventário com as opções marcadas no perfil."""
+    if not categorias:
+        return False
+    allowed = {_categoria_key(item) for item in categorias}
+    key = _categoria_key(categoria)
+    if key in allowed:
+        return True
+    official = {_categoria_key(item) for item in CATEGORIAS_PASSEIO}
+    if key in official:
+        return False
+    return any(part in allowed for part in key.split("/") if part)
+
+
+def filter_inventory_by_categories(
+    inventory: list[Attraction], categorias: list[str]
+) -> list[Attraction]:
+    if not categorias:
+        return []
+    return [
+        item
+        for item in inventory
+        if _categoria_fixa_do_roteiro(item.categoria)
+        or attraction_in_selected_categories(item.categoria, categorias)
+    ]
+
+
 def filter_inventory_by_cities(inventory: list[Attraction], cidades: list[str]) -> list[Attraction]:
     if not cidades:
         return []
@@ -264,6 +373,7 @@ def empty_tourist_profile() -> TouristProfile:
         cohen_scores={q.id: 0 for q in COHEN_QUESTIONS},
         check_in=None,
         check_out=None,
+        categorias=[],
     )
 
 
@@ -305,6 +415,8 @@ def validate_profile_for_roteiro(profile: TouristProfile) -> list[str]:
         missing.append("Ritmo de viagem")
     if not profile.cidades:
         missing.append("Cidades do roteiro (selecione ao menos uma)")
+    if not profile.categorias:
+        missing.append("Categorias de passeio (selecione ao menos uma)")
     for q in PLOG_QUESTIONS:
         if profile.plog_scores.get(q.id, 0) not in range(1, 6):
             missing.append(f"Plog {q.id} (escolha nota de 1 a 5)")
@@ -403,6 +515,7 @@ def _read_profile_sheet(ws: Worksheet) -> TouristProfile:
         cohen_scores=cohen,
         check_in=parse_date_value(ws["B10"].value),
         check_out=parse_date_value(ws["D10"].value),
+        categorias=parse_categorias_selecionadas(ws["B29"].value),
     )
 
 
@@ -418,6 +531,8 @@ def write_profile_to_sheet(ws: Worksheet, profile: TouristProfile) -> None:
     ws["B7"] = profile.perfil_predominante or None
     ws["B8"] = profile.ritmo or None
     ws["B9"] = serialize_cidades_selecionadas(profile.cidades) or None
+    ws["A29"] = "Categorias de passeio"
+    ws["B29"] = serialize_categorias_selecionadas(profile.categorias) or None
 
     row_map = {"P1": 13, "P2": 14, "P3": 15, "C1": 19, "C2": 20, "C3": 21}
     for qid, row in row_map.items():
@@ -488,8 +603,9 @@ def _inventory_format(header: tuple[Any, ...]) -> str:
 
 def _infer_categoria(nome: str) -> str:
     n = nome.lower()
-    keys = ("feira", "cervejaria", "gastronomia", "restaurante", "comida", "café", "cafe")
-    if any(k in n for k in keys):
+    if any(k in n for k in ("restaurante", "comida", "refeicao", "refeição")):
+        return "Refeição"
+    if any(k in n for k in ("feira", "cervejaria", "gastronomia", "café", "cafe")):
         return "Gastronomia"
     if any(k in n for k in ("cachoeira", "mirante", "trilha", "natureza", "pedra")):
         return "Natureza"
@@ -499,7 +615,7 @@ def _infer_categoria(nome: str) -> str:
 
 
 def _infer_tempo_horas(categoria: str) -> float:
-    if categoria == "Gastronomia":
+    if categoria == "Refeição":
         return 2.0
     if categoria == "Natureza":
         return 2.5
@@ -755,21 +871,8 @@ def _hours_to_store(item: Attraction) -> dict[str, tuple[time | None, time | Non
 
 
 def _write_full_inventory_sheet(ws: Worksheet, items: list[Attraction]) -> None:
-    base_headers = (
-        "ID",
-        "Nome da Atração",
-        "Categoria",
-        "Capacidade Máx. Grupo (Pessoas)",
-        "Tempo Médio (horas)",
-        "Peso Plog (Aventura)",
-        "Peso Cohen (Independência)",
-        "Descrição Breve",
-        "Cidade",
-        "Maps",
-        "Imagem",
-        "Ingresso",
-    )
-    day_labels = ("Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo", "Feriado")
+    base_headers = INVENTORY_BASE_HEADERS
+    day_labels = INVENTORY_DAY_LABELS
     for col, header in enumerate(base_headers, start=1):
         ws.cell(1, col, header)
     col = len(base_headers) + 1
@@ -810,87 +913,50 @@ def _external_inventory_model_path() -> Path:
     )
 
 
-def create_inventory_template(path: Path | None = None) -> Path:
-    from openpyxl import Workbook
+def _desktop_inventory_model_path() -> Path:
+    return Path.home() / "OneDrive" / "Desktop" / "Modelo_Inventario_Turistico.xlsx"
+
+
+def _inventory_model_sources() -> list[Path]:
+    """A planilha do Desktop prevalece; a pasta do projeto integrador é o segundo exemplar."""
+    return [_desktop_inventory_model_path(), _external_inventory_model_path()]
+
+
+def _style_inventory_template(ws: Worksheet) -> None:
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.datavalidation import DataValidation
-    from openpyxl.worksheet.table import Table, TableStyleInfo
-
-    target = path or inventory_template_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    external = _external_inventory_model_path()
-    if external.is_file():
-        shutil.copy2(external, target)
-        return target
-
-    master = default_workbook_path(data_dir().parent)
-    examples: list[tuple[Any, ...]] = []
-    if master.exists():
-        src = load_workbook(master, data_only=True)
-        if INVENTORY_SHEET in src.sheetnames:
-            ws_src = src[INVENTORY_SHEET]
-            for row in ws_src.iter_rows(min_row=2, max_row=5, values_only=True):
-                if row and row[0]:
-                    examples.append(row)
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = INVENTORY_SHEET
 
     header_fill = PatternFill("solid", fgColor="1F4E79")
     header_font = Font(bold=True, color="FFFFFF")
+    subheader_fill = PatternFill("solid", fgColor="2E75B6")
     cap_header_fill = PatternFill("solid", fgColor="548235")
     score_header_fill = PatternFill("solid", fgColor="2F75B5")
-    cap_fill = PatternFill("solid", fgColor="E2EFDA")
-    score_fill = PatternFill("solid", fgColor="DDEBF7")
-
-    for col, header in enumerate(FULL_INVENTORY_HEADERS, start=1):
-        cell = ws.cell(1, col, header)
+    last_col = len(INVENTORY_BASE_HEADERS) + len(INVENTORY_DAY_LABELS) * 2
+    for col in range(1, last_col + 1):
+        cell = ws.cell(1, col)
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        if col == 6:
+        if col == 4:
             cell.fill = cap_header_fill
-        elif col in (8, 9):
+        elif col in (6, 7):
             cell.fill = score_header_fill
         else:
             cell.fill = header_fill
+        sub = ws.cell(2, col)
+        if sub.value:
+            sub.font = header_font
+            sub.fill = subheader_fill
+            sub.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    last_row = 1
-    for row_idx, row in enumerate(examples, start=2):
-        normalized = _normalize_full_import_row(row)
-        for col_idx, value in enumerate(normalized[: len(FULL_INVENTORY_HEADERS)], start=1):
-            ws.cell(row_idx, col_idx, value)
-        last_row = row_idx
-
-    if last_row == 1:
-        last_row = 2
-        ws.cell(2, 1, "ATR_01")
-
-    for row in range(2, last_row + 1):
-        ws.cell(row, 6).fill = cap_fill
-        ws.cell(row, 8).fill = score_fill
-        ws.cell(row, 9).fill = score_fill
-
-    widths = [10, 34, 22, 14, 14, 16, 14, 14, 16, 48, 18, 42, 42, 16]
+    widths = [12, 36, 24, 18, 16, 14, 16, 48, 20, 42, 42, 16]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
+    for col in range(len(widths) + 1, last_col + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 20
 
-    ws.freeze_panes = "A2"
-
-    table = Table(
-        displayName="InventarioTuristico",
-        ref=f"A1:N{last_row}",
-    )
-    table.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium2",
-        showFirstColumn=False,
-        showLastColumn=False,
-        showRowStripes=True,
-        showColumnStripes=False,
-    )
-    ws.add_table(table)
+    ws.freeze_panes = "A3"
+    ws.row_dimensions[1].height = 30
 
     peso_validation = DataValidation(
         type="list",
@@ -900,8 +966,7 @@ def create_inventory_template(path: Path | None = None) -> Path:
     peso_validation.error = "Escolha um valor de 1 a 5 na lista."
     peso_validation.errorTitle = "Peso inválido"
     ws.add_data_validation(peso_validation)
-    peso_validation.add(f"H2:H500")
-    peso_validation.add(f"I2:I500")
+    peso_validation.add("F3:G500")
 
     city_validation = DataValidation(
         type="list",
@@ -909,18 +974,81 @@ def create_inventory_template(path: Path | None = None) -> Path:
         allow_blank=True,
     )
     ws.add_data_validation(city_validation)
-    city_validation.add(f"K2:K500")
+    city_validation.add("I3:I500")
 
+
+def _write_template_help(wb) -> None:
     help_ws = wb.create_sheet("Como preencher")
-    help_ws["A1"] = f"Modelo de inventário — {INVENTORY_SHEET}"
-    help_ws["A3"] = "Preencha todas as colunas conforme o cabeçalho da aba Inventário Turístico."
-    help_ws["A4"] = "Horários: HH:MM. Peso Plog e Peso Cohen: escolha na lista (1 a 5)."
-    help_ws["A5"] = "Coluna Cidade (K): Botucatu, Pardinho ou Bofete (ex.: Pardinho - SP)."
-    help_ws["A6"] = "Coluna Maps (L): link do Google Maps (compartilhar → copiar link)."
-    help_ws["A7"] = "Coluna Imagem (M): link direto da foto do atrativo (https://...). Entra no PDF no lugar do mini mapa."
-    help_ws["A8"] = "Coluna Ingresso (N): valor do atrativo (ex.: R$ 80,00). Se ficar vazia, o roteiro não mostra valor."
-    help_ws["A9"] = "Capacidade = número máximo de pessoas do grupo na atração."
+    lines = [
+        f"Modelo de inventário — {INVENTORY_SHEET}",
+        None,
+        "As colunas são as mesmas da aba Inventário do programa.",
+        "ID, Nome da Atração, Categoria, Capacidade Máx. Grupo (Pessoas), Tempo Médio (horas), "
+        "Peso Plog (Aventura), Peso Cohen (Independência), Descrição Breve, Cidade, Maps, Imagem, Ingresso.",
+        "Depois do Ingresso, cada dia (Segunda a Domingo e Feriado) tem duas colunas: "
+        "Horário de Abertura e Horário de Fechamento.",
+        "Horários: HH:MM. Peso Plog e Peso Cohen: escolha na lista (1 a 5).",
+        "Cidade (coluna I): Botucatu, Pardinho ou Bofete (ex.: Pardinho - SP).",
+        "Maps (coluna J): link do Google Maps (compartilhar → copiar link).",
+        "Imagem (coluna K): link direto da foto do atrativo (https://...). Entra no PDF no lugar do mini mapa.",
+        "Ingresso (coluna L): valor do atrativo (ex.: R$ 80,00). Se ficar vazio, o roteiro não mostra valor.",
+        "Capacidade = número máximo de pessoas do grupo na atração. Tempo Médio = permanência em horas.",
+    ]
+    for row, text in enumerate(lines, start=1):
+        help_ws.cell(row, 1, text)
+    help_ws.column_dimensions["A"].width = 120
 
+
+def _template_attractions(target: Path) -> list[Attraction]:
+    for candidate in (*_inventory_model_sources(), target):
+        if not candidate.is_file():
+            continue
+        try:
+            items = read_inventory(candidate)
+        except (OSError, KeyError, ValueError):
+            continue
+        if items:
+            return items
+    return []
+
+
+def resolve_inventory_template() -> Path | None:
+    """Planilha de modelo pronta para exportar, sem regravar as abas."""
+    for source in _inventory_model_sources():
+        if source.is_file():
+            return source
+    bundled = inventory_template_path()
+    if bundled.is_file():
+        return bundled
+    return None
+
+
+def create_inventory_template(path: Path | None = None) -> Path:
+    from openpyxl import Workbook
+
+    target = path or inventory_template_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = resolve_inventory_template()
+
+    if source is not None:
+        if source.resolve() == target.resolve():
+            return target
+        try:
+            shutil.copy2(source, target)
+            return target
+        except OSError:
+            return source
+
+    if target.is_file():
+        return target
+
+    items = _template_attractions(target)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = INVENTORY_SHEET
+    _write_full_inventory_sheet(ws, items)
+    _style_inventory_template(ws)
+    _write_template_help(wb)
     wb.save(target)
     return target
 
@@ -1075,6 +1203,29 @@ def _normalize_attraction_id(attr_id: str) -> str:
     return (attr_id or "").strip().upper()
 
 
+def duplicate_attraction_ids(items: list[Attraction]) -> list[str]:
+    """IDs que aparecem mais de uma vez. Esses atrativos não devem ser abertos."""
+    counts: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    for item in items:
+        raw = (item.id or "").strip()
+        key = _normalize_attraction_id(raw)
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        labels.setdefault(key, raw)
+    return [labels[key] for key in sorted(counts) if counts[key] > 1]
+
+
+def duplicate_ids_message(ids: list[str]) -> str:
+    listed = ", ".join(ids)
+    return (
+        "O inventário tem IDs duplicados. Esses atrativos não foram abertos.\n\n"
+        f"IDs: {listed}\n\n"
+        "Corrija a planilha para que cada atração tenha um ID único e importe de novo."
+    )
+
+
 def _attraction_dedupe_key(item: Attraction) -> tuple[str, str]:
     city = canonical_city_name(item.cidade) or (item.cidade or "").strip().lower()
     name = " ".join((item.nome or "").lower().split())
@@ -1096,6 +1247,7 @@ class InventoryMergeStats:
     updated: int = 0
     removed_duplicate_ids: int = 0
     removed_duplicate_names: int = 0
+    skipped_duplicate_names: int = 0
 
 
 def _attraction_fingerprint(item: Attraction) -> tuple[Any, ...]:
@@ -1143,40 +1295,53 @@ def _dedupe_inventory_by_name(items: list[Attraction]) -> tuple[list[Attraction]
     return merged, removed_name
 
 
+def _attraction_name_key(item: Attraction) -> str:
+    return _normalize_header_cell(item.nome)
+
+
+def _next_attraction_id(existing: list[Attraction]) -> str:
+    """Próximo ID na sequência do maior número já usado (ex.: ATR_96 → ATR_97)."""
+    prefix = "ATR_"
+    number = 0
+    width = 2
+    for item in existing:
+        raw = _normalize_attraction_id(item.id)
+        match = re.match(r"^(.*?)(\d+)$", raw)
+        if not match:
+            continue
+        current = int(match.group(2))
+        if current >= number:
+            number = current
+            prefix = match.group(1) or "ATR_"
+            width = len(match.group(2))
+    return f"{prefix}{number + 1:0{width}d}"
+
+
 def merge_inventories_incremental(
     existing: list[Attraction],
     incoming: list[Attraction],
 ) -> tuple[list[Attraction], InventoryMergeStats]:
-    """Aplica o catálogo remoto sobre a sessão: novos IDs, alterações e remoção de duplicatas."""
-    by_id: dict[str, Attraction] = {}
-    for item in existing:
-        nid = _normalize_attraction_id(item.id)
-        if nid:
-            by_id[nid] = item
-
-    before = len(by_id)
+    """Acrescenta só atrativos com nome novo. O ID segue o último da sessão."""
+    kept = list(existing)
+    known_names = {_attraction_name_key(item) for item in existing if _attraction_name_key(item)}
     added = 0
-    updated = 0
+    skipped = 0
     for item in incoming:
-        nid = _normalize_attraction_id(item.id)
-        if not nid:
+        name = _attraction_name_key(item)
+        if not name or name in known_names:
+            if name:
+                skipped += 1
             continue
-        if nid not in by_id:
-            by_id[nid] = item
-            added += 1
-        elif _attraction_fingerprint(by_id[nid]) != _attraction_fingerprint(item):
-            by_id[nid] = item
-            updated += 1
-
-    merged, removed_name = _dedupe_inventory_by_name(list(by_id.values()))
+        kept.append(replace(item, id=_next_attraction_id(kept)))
+        known_names.add(name)
+        added += 1
     stats = InventoryMergeStats(
-        before=before,
-        after=len(merged),
+        before=len(existing),
+        after=len(kept),
         added=added,
-        updated=updated,
-        removed_duplicate_names=removed_name,
+        skipped_duplicate_names=skipped,
     )
-    return merged, stats
+    return kept, stats
 
 
 def merge_inventories_deduped(
@@ -1230,6 +1395,9 @@ def import_inventory_sheet(workbook_path: Path, uploaded_path: Path) -> int:
     items = read_inventory_from_uploaded(uploaded_path)
     if not items:
         raise ValueError("Nenhuma atração válida encontrada. Use o modelo Modelo_Inventario_Turistico.xlsx.")
+    duplicated = duplicate_attraction_ids(items)
+    if duplicated:
+        raise ValueError(duplicate_ids_message(duplicated))
     save_inventory(workbook_path, items)
     return len(items)
 
@@ -1245,6 +1413,7 @@ def profile_and_inventory_as_text(workbook_path: Path) -> str:
         f"Perfil: {profile.perfil_predominante}",
         f"Ritmo: {profile.ritmo}",
         f"Cidades: {', '.join(profile.cidades) if profile.cidades else '—'}",
+        f"Categorias: {serialize_categorias_selecionadas(profile.categorias) or '—'}",
         f"Média Plog: {profile.media_plog:.2f}",
         f"Média Cohen: {profile.media_cohen:.2f}",
         "",

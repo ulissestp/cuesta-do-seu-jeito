@@ -11,7 +11,13 @@ from pathlib import Path
 
 from src.app_paths import data_dir, output_dir
 from src.app_update import AppUpdateResult, check_application_update
-from src.excel_io import InventoryMergeStats, merge_inventories_incremental, read_inventory, read_inventory_from_uploaded, save_inventory
+from src.excel_io import (
+    InventoryMergeStats,
+    merge_inventories_incremental,
+    read_inventory,
+    read_inventory_from_uploaded,
+    save_inventory,
+)
 
 _SYNC_STATE = "inventario_sync.json"
 _CATALOG_CACHE = "catalogo_inventario.xlsx"
@@ -90,16 +96,17 @@ def fetch_remote_manifest() -> dict:
 
 
 def _inventory_change_message(stats: InventoryMergeStats, remote_version: str) -> str:
-    removed = stats.removed_duplicate_names
-    if stats.added or stats.updated or removed:
-        parts = [f"catálogo {remote_version}"]
-        if stats.added:
-            parts.append(f"{stats.added} novo(s)")
-        if stats.updated:
-            parts.append(f"{stats.updated} alterado(s)")
-        if removed:
-            parts.append(f"{removed} duplicata(s) removida(s)")
+    skipped = stats.skipped_duplicate_names
+    if stats.added:
+        parts = [f"catálogo {remote_version}", f"{stats.added} novo(s)"]
+        if skipped:
+            parts.append(f"{skipped} nome(s) já existente(s) não importado(s)")
         return f"Inventário atualizado ({', '.join(parts)}). Total: {stats.after} atrativos."
+    if skipped:
+        return (
+            f"Inventário já alinhado ao catálogo {remote_version} ({stats.after} atrativos). "
+            f"{skipped} nome(s) já existente(s) não importado(s)."
+        )
     return f"Inventário já alinhado ao catálogo {remote_version} ({stats.after} atrativos)."
 
 

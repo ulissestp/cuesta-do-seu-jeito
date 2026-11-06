@@ -20,6 +20,7 @@ from src.form_constants import (
 )
 from src.excel_io import (
     COHEN_QUESTIONS,
+    CATEGORIAS_PASSEIO,
     CIDADES_ROTEIRO,
     PLOG_QUESTIONS,
     TouristProfile,
@@ -30,6 +31,7 @@ from src.excel_io import (
     clear_profile_only,
     import_inventory_sheet,
     inventory_template_path,
+    resolve_inventory_template,
     read_inventory,
     read_profile,
     save_profile,
@@ -123,6 +125,12 @@ def step_profile() -> None:
             default=[c for c in current.cidades if c in CIDADES_ROTEIRO],
             format_func=lambda c: f"{list(CIDADES_ROTEIRO).index(c) + 1} - {c}",
         )
+        categorias = st.multiselect(
+            "Categorias de passeio (escolha uma ou mais)",
+            list(CATEGORIAS_PASSEIO),
+            default=[c for c in current.categorias if c in CATEGORIAS_PASSEIO],
+            help="O roteiro usa somente atrativos das categorias marcadas. Pelo menos uma é obrigatória.",
+        )
 
         st.markdown("#### 2. Eixo psicográfico (Plog) — avalie de 1 a 5")
         st.caption("Cada pergunta começa em branco (—). Nota de 1 a 5 é obrigatória para gerar o roteiro.")
@@ -170,6 +178,7 @@ def step_profile() -> None:
             perfil_predominante=normalize_form_choice(perfil),
             ritmo=normalize_form_choice(ritmo),
             cidades=list(cidades),
+            categorias=list(categorias),
             plog_scores=plog_scores,
             cohen_scores=cohen_scores,
         )
@@ -201,11 +210,12 @@ def step_inventory() -> None:
             st.warning(result.inventory.message)
         st.rerun()
     st.caption(
-        "Modelo com **11 colunas** (… descrição e **Cidade** na coluna K). "
-        "O roteiro usa só atrações das cidades marcadas no perfil."
+        "O modelo inclui cidade, tempo médio, ingresso, horários da semana e a aba Parâmetros. "
+        "O roteiro usa só atrações das cidades e categorias marcadas no perfil."
     )
-    model_path = inventory_template_path(PROJECT_ROOT)
-    create_inventory_template(model_path)
+    model_path = resolve_inventory_template() or create_inventory_template(
+        inventory_template_path(PROJECT_ROOT)
+    )
     st.download_button(
         "Baixar modelo de inventário (.xlsx)",
         model_path.read_bytes(),
