@@ -81,7 +81,7 @@ CATEGORIAS_PASSEIO = (
     "Gastronomia",
     "Aventura",
     "Histórico",
-    "Cultura/Religioso",
+    "Histórico/Religioso",
 )
 
 
@@ -271,7 +271,7 @@ def _categoria_key(raw: str) -> str:
     if text == "cultural":
         return "cultura"
     if text in {"religioso", "cultura/religioso", "historico/religioso"}:
-        return "cultura/religioso"
+        return "historico/religioso"
     if text in {"gastronomia/cultural", "refeicao/cultural"}:
         return "gastronomia"
     return text

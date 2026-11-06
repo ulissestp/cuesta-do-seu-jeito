@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
 from src.brazil_holidays import is_brazilian_holiday
-from src.excel_io import Attraction, TouristProfile, canonical_city_name, is_meal_gastronomy, trip_dates
+from src.excel_io import (
+    CATEGORIAS_PASSEIO,
+    Attraction,
+    TouristProfile,
+    canonical_city_name,
+    is_meal_gastronomy,
+    trip_dates,
+    _categoria_key,
+)
 from src.opening_hours import resolved_hours
 from src.geo_distance import GeoContext, LatLng, haversine_km, travel_minutes_between
 from src.group_scores import GroupScores, build_technical_analysis
@@ -40,6 +49,28 @@ class DayPlan:
     theme: str
     blocks: list[ScheduleBlock] = field(default_factory=list)
     service_date: datetime | None = None
+
+
+@dataclass(frozen=True)
+class RoteiroProgress:
+    """Passo visível da montagem do roteiro."""
+
+    message: str
+    fraction: float
+    text: str = ""
+
+
+ProgressCallback = Callable[[RoteiroProgress], None]
+
+
+def _report(
+    on_progress: ProgressCallback | None,
+    message: str,
+    fraction: float,
+    text: str = "",
+) -> None:
+    if on_progress is not None:
+        on_progress(RoteiroProgress(message=message, fraction=fraction, text=text))
 
 
 @dataclass
@@ -462,9 +493,11 @@ def _visit_pool(selected: list[Attraction]) -> list[Attraction]:
 
 
 def _theme_category(categoria: str) -> str:
+    key = _categoria_key(categoria)
+    for official in CATEGORIAS_PASSEIO:
+        if _categoria_key(official) == key:
+            return official
     text = (categoria or "").strip()
-    if text.lower().replace(" ", "").startswith("gastronomia/"):
-        return text
     head = text.split("/")[0].strip()
     return head or "Passeio"
 
@@ -796,6 +829,7 @@ def build_itinerary(
     inventory: list[Attraction],
     scores: GroupScores | None = None,
     pinned_ids: list[str] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> ItineraryResult:
     scores = scores or GroupScores.from_profile(profile)
     selected = filter_attractions(profile, inventory, scores)
@@ -822,8 +856,21 @@ def build_itinerary(
     used_global: set[str] = set()
     used_evening: set[str] = set()
     trip_lodging = _pick_lodging_suggestions(profile, inventory, scores)
+    _report(
+        on_progress,
+        "Sugestões de hospedagem definidas.",
+        0.32,
+        lodging_section_markdown(trip_lodging),
+    )
 
+    total_days = len(dates)
     for day, service_date in enumerate(dates, start=1):
+        day_fraction = 0.36 + 0.50 * ((day - 1) / total_days)
+        _report(
+            on_progress,
+            f"Montando o dia {day} de {total_days}…",
+            day_fraction,
+        )
         day_anchor = datetime.combine(
             service_date,
             time(DAY_LATEST_FIRST_START.hour, DAY_LATEST_FIRST_START.minute),
@@ -967,7 +1014,14 @@ def build_itinerary(
             )
             used_evening.update(a.id for a in evening_dining)
 
-        days.append(DayPlan(day_number=day, theme=theme, blocks=blocks, service_date=day_anchor))
+        day_plan = DayPlan(day_number=day, theme=theme, blocks=blocks, service_date=day_anchor)
+        days.append(day_plan)
+        _report(
+            on_progress,
+            f"Dia {day} de {total_days} pronto — {theme}",
+            0.36 + 0.50 * (day / total_days),
+            day_to_markdown(day_plan),
+        )
 
     by_id = {a.id: a for a in inventory}
     used_attractions = [
@@ -985,6 +1039,12 @@ def build_itinerary(
         weights,
         fora_do_perfil=bool(outside),
         atrativos_fora=outside_names,
+    )
+    _report(
+        on_progress,
+        "Validando o roteiro…",
+        0.9,
+        f"## Análise e validação técnica\n{justification}\n",
     )
 
     return ItineraryResult(
@@ -1021,6 +1081,56 @@ _WEEKDAY_PT = (
 )
 
 
+def itinerary_opening_markdown(profile: TouristProfile, scores: GroupScores) -> str:
+    period = ""
+    if profile.check_in and profile.check_out:
+        period = (
+            f" ({profile.check_in.strftime('%d/%m/%Y')} a "
+            f"{profile.check_out.strftime('%d/%m/%Y')})"
+        )
+    categories = ", ".join(profile.categorias) if profile.categorias else "—"
+    lines = [
+        f"# Roteiro de Viagem — {profile.nome_grupo}",
+        f"Duração: {profile.duracao_dias} dia(s){period}",
+        (
+            f"Média Plog: {scores.media_plog:.2f} | Média Cohen: {scores.media_cohen:.2f} | "
+            f"Fator: {scores.fator_restritivo}"
+        ),
+        f"Categorias: {categories}",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def lodging_section_markdown(lodging: list[Attraction]) -> str:
+    lines = [
+        "### Quadro-resumo — Sugestões de hospedagem (pernoite)",
+        _lodging_options_summary(lodging),
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def day_to_markdown(day: DayPlan) -> str:
+    lines = [f"## {day_heading(day)}"]
+    for block in day.blocks:
+        if block.kind == "lodging" and block.start == block.end:
+            lines.append(f"**Noite — {block.title}**")
+        elif block.kind == "evening_dining" and block.start == block.end:
+            detail = _block_detail_markdown(block) if block.detail else ""
+            suffix = f" — {detail}" if detail else ""
+            lines.append(f"**{_fmt_time(block.start)} — {block.title}**{suffix}")
+        elif block.kind == "end" and block.start == block.end:
+            lines.append(f"**{_fmt_time(block.start)} — {block.title}** — {block.detail}")
+        else:
+            lines.append(
+                f"**{_fmt_time(block.start)} – {_fmt_time(block.end)}** — "
+                f"{block.title}: {_block_detail_markdown(block)}"
+            )
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def day_heading(day: DayPlan) -> str:
     when = ""
     if day.service_date:
@@ -1033,44 +1143,10 @@ def day_heading(day: DayPlan) -> str:
 
 
 def itinerary_to_markdown(result: ItineraryResult) -> str:
-    p = result.profile
-    s = result.scores
-    lines = [
-        f"# Roteiro de Viagem — {p.nome_grupo}",
-        f"Duração: {p.duracao_dias} dia(s)"
-        + (
-            f" ({p.check_in.strftime('%d/%m/%Y')} a {p.check_out.strftime('%d/%m/%Y')})"
-            if p.check_in and p.check_out
-            else ""
-        ),
-        f"Média Plog: {s.media_plog:.2f} | Média Cohen: {s.media_cohen:.2f} | Fator: {s.fator_restritivo}",
-        f"Categorias: {', '.join(p.categorias) if p.categorias else '—'}",
-        "",
+    parts = [
+        itinerary_opening_markdown(result.profile, result.scores),
+        lodging_section_markdown(result.lodging_suggestions),
+        *(day_to_markdown(day) for day in result.days),
+        f"## Análise e validação técnica\n{result.justification}\n",
     ]
-    lines.extend(
-        [
-            "### Quadro-resumo — Sugestões de hospedagem (pernoite)",
-            _lodging_options_summary(result.lodging_suggestions),
-            "",
-        ]
-    )
-    for day in result.days:
-        lines.append(f"## {day_heading(day)}")
-        for block in day.blocks:
-            if block.kind == "lodging" and block.start == block.end:
-                lines.append(f"**Noite — {block.title}**")
-            elif block.kind == "evening_dining" and block.start == block.end:
-                detail = _block_detail_markdown(block) if block.detail else ""
-                suffix = f" — {detail}" if detail else ""
-                lines.append(f"**{_fmt_time(block.start)} — {block.title}**{suffix}")
-            elif block.kind == "end" and block.start == block.end:
-                lines.append(f"**{_fmt_time(block.start)} — {block.title}** — {block.detail}")
-            else:
-                lines.append(
-                    f"**{_fmt_time(block.start)} – {_fmt_time(block.end)}** — "
-                    f"{block.title}: {_block_detail_markdown(block)}"
-                )
-        lines.append("")
-    lines.append("## Análise e validação técnica")
-    lines.append(result.justification)
-    return "\n".join(lines)
+    return "".join(parts).rstrip() + "\n"

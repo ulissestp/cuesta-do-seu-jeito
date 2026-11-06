@@ -54,7 +54,7 @@ from src.form_constants import (
     parse_score_choice,
 )
 from src.session_store import load_last_workbook, remember_workbook
-from src.itinerary_engine import itinerary_to_markdown
+from src.itinerary_engine import RoteiroProgress, itinerary_to_markdown
 from src.pdf_export import build_pdf, roteiro_pdf_filename
 from src.anamnese_pdf import anamnese_pdf_filename, build_anamnese_pdf
 from src.roteiro_service import gerar_roteiro_da_planilha
@@ -705,7 +705,11 @@ class RoteiroDesktopApp(ctk.CTk):
         )
 
         self.pdf_status = ctk.CTkLabel(parent, text="", anchor="w")
-        self.pdf_status.pack(fill="x", pady=4)
+        self.pdf_status.pack(fill="x", pady=(4, 2))
+
+        self.pdf_progress = ctk.CTkProgressBar(parent)
+        self.pdf_progress.set(0)
+        self.pdf_progress.pack(fill="x", pady=(0, 6))
 
         self.preview = ctk.CTkTextbox(parent, font=ctk.CTkFont(family="Consolas", size=11))
         self.preview.pack(fill="both", expand=True, pady=8)
@@ -992,13 +996,18 @@ class RoteiroDesktopApp(ctk.CTk):
         by_id = {attraction.id: attraction for attraction in inventory}
         chosen: list[str] = []
         seen: set[str] = set()
+        stale = False
         for original in self._used_order:
-            target = self._novo_ids.get(original, "").strip() or original
+            explicit = self._novo_ids.get(original, "").strip()
+            target = explicit or original
             attraction = by_id.get(target)
             if attraction is None:
-                raise ValueError(
-                    f"O ID '{target}' não está nas cidades e categorias marcadas no perfil."
-                )
+                if explicit:
+                    raise ValueError(
+                        f"O ID '{target}' não está nas cidades e categorias marcadas no perfil."
+                    )
+                stale = True
+                continue
             if "hospedagem" in attraction.categoria.lower():
                 raise ValueError(
                     f"{target} é hospedagem. Informe o ID de um atrativo ou de uma refeição."
@@ -1007,7 +1016,16 @@ class RoteiroDesktopApp(ctk.CTk):
                 raise ValueError(f"O ID {target} ficou repetido na nova seleção.")
             seen.add(target)
             chosen.append(target)
-        return chosen
+        if stale:
+            return None
+        return chosen or None
+
+    def _show_roteiro_progress(self, event: RoteiroProgress) -> None:
+        self.pdf_progress.set(max(0.0, min(1.0, event.fraction)))
+        self.pdf_status.configure(text=event.message)
+        if event.text:
+            self.preview.insert("end", event.text)
+            self.preview.see("end")
 
     def _generate_pdf(self) -> None:
         if self._pdf_job_running:
@@ -1047,7 +1065,9 @@ class RoteiroDesktopApp(ctk.CTk):
         workbook = self.workbook_path
         self._pdf_job_running = True
         self.btn_generate_pdf.configure(state="disabled")
-        self.pdf_status.configure(text="Calculando roteiro e gerando PDF… Aguarde.")
+        self.preview.delete("0.0", "end")
+        self.pdf_progress.set(0.02)
+        self.pdf_status.configure(text="Iniciando o roteiro…")
         self.update_idletasks()
 
         def worker() -> None:
@@ -1055,11 +1075,21 @@ class RoteiroDesktopApp(ctk.CTk):
             result = None
             pdf_path: Path | None = None
             preview_text = ""
+
+            def on_progress(event: RoteiroProgress) -> None:
+                self.after(0, lambda event=event: self._show_roteiro_progress(event))
+
             try:
-                result = gerar_roteiro_da_planilha(workbook, pinned_ids=pinned_ids)
+                result = gerar_roteiro_da_planilha(
+                    workbook,
+                    pinned_ids=pinned_ids,
+                    on_progress=on_progress,
+                )
+                on_progress(RoteiroProgress("Gerando o PDF…", 0.94))
                 pdf_path = OUT / roteiro_pdf_filename(result.profile.nome_grupo)
                 build_pdf(result, pdf_path)
                 preview_text = itinerary_to_markdown(result)
+                on_progress(RoteiroProgress("PDF pronto.", 1.0))
             except ValueError as exc:
                 err = ("inventario", exc)
             except Exception as exc:
@@ -1074,6 +1104,8 @@ class RoteiroDesktopApp(ctk.CTk):
                         messagebox.showerror("Inventário", str(exc))
                     else:
                         messagebox.showerror("Erro", str(exc))
+                    self.preview.delete("0.0", "end")
+                    self.pdf_progress.set(0)
                     self.pdf_status.configure(text="")
                     return
                 assert result is not None and pdf_path is not None
@@ -1147,6 +1179,7 @@ class RoteiroDesktopApp(ctk.CTk):
         self._used_order = []
         self._novo_ids = {}
         self.preview.delete("0.0", "end")
+        self.pdf_progress.set(0)
         self.pdf_status.configure(text="")
         self._apply_empty_form()
         self._refresh_inventory_table()
