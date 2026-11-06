@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -19,7 +20,8 @@ from reportlab.platypus import (
 )
 
 from src.app_paths import logo_path
-from src.attraction_images import attraction_thumbnail_flowable
+from src.attraction_images import attraction_thumbnail_flowable, prefetch_attraction_photos
+from src.maps_static_thumbnail import coords_for_schedule_block, fetch_map_thumbnail_bytes
 from src.branding import APP_NAME_PDF, APP_TAGLINE, APP_VERSION, pdf_version_label
 from src.itinerary_engine import (
     DayPlan,
@@ -328,8 +330,37 @@ def roteiro_pdf_filename(nome_grupo: str, *, when: datetime | None = None) -> st
     return f"Roteiro_{safe_name.replace(' ', '_')}_{stamp}.pdf"
 
 
+def _warm_map_thumbnails(result: ItineraryResult) -> None:
+    points: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+    for day in result.days:
+        for block in day.blocks:
+            if block.kind not in ("visit", "lunch", "evening_dining") or block.image_url:
+                continue
+            point = coords_for_schedule_block(maps_url=block.maps_url, title=block.title)
+            if not point:
+                continue
+            key = (round(point.lat, 5), round(point.lng, 5))
+            if key in seen:
+                continue
+            seen.add(key)
+            points.append(key)
+    photos = [
+        block.image_url
+        for day in result.days
+        for block in day.blocks
+        if block.kind in ("visit", "lunch", "evening_dining") and block.image_url
+    ]
+    prefetch_attraction_photos(photos)
+    if not points:
+        return
+    with ThreadPoolExecutor(max_workers=min(6, len(points))) as pool:
+        list(pool.map(lambda item: fetch_map_thumbnail_bytes(item[0], item[1]), points))
+
+
 def build_pdf(result: ItineraryResult, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    _warm_map_thumbnails(result)
     client_name = result.profile.nome_grupo or "Cliente"
 
     doc = SimpleDocTemplate(
