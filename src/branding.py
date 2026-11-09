@@ -3,6 +3,7 @@ APP_NAME_PDF = "CUESTA DO SEU JEITO"
 APP_TAGLINE = "Roteiros Turísticos"
 APP_VERSION = "1.2.3"
 APP_VERSION_SHORT = "1.2"
+SESSION_CAPTION = "Projeto Integrador Curso Técnico em Guia de Turismo - Senac Botucatu - SP"
 
 
 def desktop_window_title() -> str:

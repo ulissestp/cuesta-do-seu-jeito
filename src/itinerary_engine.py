@@ -17,6 +17,7 @@ from src.excel_io import (
 )
 from src.opening_hours import resolved_hours
 from src.geo_distance import GeoContext, LatLng, haversine_km, travel_minutes_between
+from src.maps_links import prefetch_maps_urls
 from src.group_scores import GroupScores, build_technical_analysis
 from src.maps_links import maps_markdown_line, try_shorten_maps_url
 
@@ -850,6 +851,8 @@ def build_itinerary(
     max_visits = _max_visits_for_ritmo(profile.ritmo)
     in_profile_ids = {attraction.id for attraction in in_profile_visits}
     outside_visits = [attraction for attraction in eligible_visits if attraction.id not in in_profile_ids]
+    _report(on_progress, "Localizando os atrativos no mapa…", 0.3)
+    prefetch_maps_urls([item.maps_url for item in inventory if item.maps_url])
     geo = GeoContext(inventory)
 
     days: list[DayPlan] = []

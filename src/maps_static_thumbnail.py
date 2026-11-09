@@ -6,10 +6,12 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 from PIL import Image, ImageDraw
 
+from src.app_paths import data_dir, output_dir, writable_root
 from src.branding import APP_VERSION_SHORT
 from src.geo_distance import LatLng, coords_for_city_label, coords_for_maps_url
 
@@ -75,7 +77,7 @@ def _osm_static_map_url(lat: float, lng: float) -> str:
 def _fetch_bytes(url: str) -> bytes | None:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=6) as resp:
             data = resp.read()
         if len(data) < 500:
             return None
@@ -121,15 +123,16 @@ def _render_osm_tile_thumbnail(lat: float, lng: float, *, width: int = 320, heig
         return None
 
     canvas = Image.new("RGB", (map_w, map_h), (236, 240, 244))
+    tiles = [(tx, ty) for tx in range(tile_x0, tile_x1 + 1) for ty in range(tile_y0, tile_y1 + 1)]
+    total = len(tiles)
+    with ThreadPoolExecutor(max_workers=min(6, total or 1)) as pool:
+        fetched = list(pool.map(lambda item: _fetch_osm_tile(zoom, item[0], item[1]), tiles))
     ok = 0
-    total = (tile_x1 - tile_x0 + 1) * (tile_y1 - tile_y0 + 1)
-    for tx in range(tile_x0, tile_x1 + 1):
-        for ty in range(tile_y0, tile_y1 + 1):
-            tile = _fetch_osm_tile(zoom, tx, ty)
-            if tile is None:
-                continue
-            ok += 1
-            canvas.paste(tile, ((tx - tile_x0) * _TILE_SIZE, (ty - tile_y0) * _TILE_SIZE))
+    for (tx, ty), tile in zip(tiles, fetched):
+        if tile is None:
+            continue
+        ok += 1
+        canvas.paste(tile, ((tx - tile_x0) * _TILE_SIZE, (ty - tile_y0) * _TILE_SIZE))
     if ok < max(1, total // 3):
         return None
 
@@ -146,15 +149,34 @@ def _render_osm_tile_thumbnail(lat: float, lng: float, *, width: int = 320, heig
     return buf.getvalue()
 
 
+def _thumbnail_cache_path(lat: float, lng: float):
+    folder = output_dir() / "map_thumbs"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"{lat:.5f}_{lng:.5f}.png"
+
+
 @lru_cache(maxsize=256)
 def fetch_map_thumbnail_bytes(lat: float, lng: float) -> bytes | None:
-    """Miniatura de mapa: Google Static Maps (com chave) ou mapa OSM na coordenada."""
+    """Miniatura de mapa: cache local, Google Static Maps ou mapa OSM."""
+    cached = _thumbnail_cache_path(lat, lng)
+    if cached.is_file():
+        try:
+            data = cached.read_bytes()
+            if len(data) >= 500:
+                return data
+        except OSError:
+            pass
     key = google_maps_static_api_key()
+    data = None
     if key:
         data = _fetch_bytes(_google_static_map_url(lat, lng, api_key=key))
-        if data:
-            return data
-    data = _fetch_bytes(_osm_static_map_url(lat, lng))
+    if not data:
+        data = _fetch_bytes(_osm_static_map_url(lat, lng))
+    if not data:
+        data = _render_osm_tile_thumbnail(lat, lng)
     if data:
-        return data
-    return _render_osm_tile_thumbnail(lat, lng)
+        try:
+            cached.write_bytes(data)
+        except OSError:
+            pass
+    return data

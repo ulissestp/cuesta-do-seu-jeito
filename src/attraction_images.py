@@ -4,6 +4,7 @@ import io
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 from PIL import Image as PILImage
@@ -44,7 +45,7 @@ def _download_image_bytes(url: str) -> bytes | None:
         headers={"User-Agent": USER_AGENT},
     )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=8) as response:
             data = response.read(_MAX_IMAGE_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return None
@@ -82,6 +83,21 @@ def _flowable_from_bytes(
         return Image(io.BytesIO(jpeg), width=width * scale, height=height * scale)
     except (OSError, ValueError, ZeroDivisionError):
         return None
+
+
+def prefetch_attraction_photos(urls: list[str]) -> None:
+    pending = []
+    seen: set[str] = set()
+    for raw in urls:
+        url = (raw or "").strip()
+        if not url.lower().startswith(("http://", "https://")) or url in seen:
+            continue
+        seen.add(url)
+        pending.append(url)
+    if not pending:
+        return
+    with ThreadPoolExecutor(max_workers=min(6, len(pending))) as pool:
+        list(pool.map(_download_image_bytes, pending))
 
 
 def _map_thumbnail_flowable(
