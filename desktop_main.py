@@ -18,7 +18,7 @@ import customtkinter as ctk
 
 from src.app_paths import output_dir, project_root, docs_dir
 from src.app_icon import ensure_app_icon
-from src.branding import desktop_header_text, desktop_window_title
+from src.branding import SESSION_CAPTION, desktop_header_text, desktop_window_title
 from src.excel_io import (
     COHEN_QUESTIONS,
     CATEGORIAS_PASSEIO,
@@ -321,27 +321,31 @@ class RoteiroDesktopApp(ctk.CTk):
         header = ctk.CTkFrame(self, corner_radius=0)
         header.pack(fill="x", padx=0, pady=0)
 
-        ctk.CTkLabel(
-            header,
-            text=desktop_header_text(),
-            font=ctk.CTkFont(size=18, weight="bold"),
-        ).pack(side="left", padx=16, pady=12)
-
         self.path_label = ctk.CTkLabel(
             header,
-            text=str(self.workbook_path.name),
+            text=SESSION_CAPTION,
             font=ctk.CTkFont(size=11),
             text_color="gray",
+            anchor="e",
         )
-        self.path_label.pack(side="right", padx=8)
+        self.path_label.pack(fill="x", padx=16, pady=(8, 0))
 
-        ctk.CTkButton(header, text="Limpar informações", width=140, command=self._clear_all).pack(
+        row = ctk.CTkFrame(header, fg_color="transparent")
+        row.pack(fill="x")
+
+        ctk.CTkLabel(
+            row,
+            text=desktop_header_text(),
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(side="left", padx=16, pady=(4, 12))
+
+        ctk.CTkButton(row, text="Limpar informações", width=140, command=self._clear_all).pack(
             side="right", padx=8, pady=8
         )
-        ctk.CTkButton(header, text="Nova planilha", width=120, command=self._new_workbook).pack(
+        ctk.CTkButton(row, text="Nova planilha", width=120, command=self._new_workbook).pack(
             side="right", padx=8, pady=8
         )
-        ctk.CTkButton(header, text="Ajuda", width=80, command=self._show_help_window).pack(
+        ctk.CTkButton(row, text="Ajuda", width=80, command=self._show_help_window).pack(
             side="right", padx=8, pady=8
         )
 
@@ -427,15 +431,18 @@ class RoteiroDesktopApp(ctk.CTk):
     def _build_tabs(self) -> None:
         self.tabs = ctk.CTkTabview(self)
         self.tabs.pack(fill="both", expand=True, padx=12, pady=12)
-        self.tabs.add("1. Perfil")
-        self.tabs.add("2. Inventário")
-        self.tabs.add("3. Roteiro PDF")
-        self.tabs.add("4. Ficha anamnese")
+        self.tabs.add("1. Logística")
+        self.tabs.add("2. Perfil")
+        self.tabs.add("3. Inventário")
+        self.tabs.add("4. Roteiro PDF")
+        self.tabs.add("5. Ficha anamnese")
 
-        self._build_profile_tab(self.tabs.tab("1. Perfil"))
-        self._build_inventory_tab(self.tabs.tab("2. Inventário"))
-        self._build_pdf_tab(self.tabs.tab("3. Roteiro PDF"))
-        self._build_anamnese_tab(self.tabs.tab("4. Ficha anamnese"))
+        self._build_profile_tab(self.tabs.tab("1. Logística"))
+        self._build_questions_tab(self.tabs.tab("2. Perfil"))
+        self._build_inventory_tab(self.tabs.tab("3. Inventário"))
+        self._build_pdf_tab(self.tabs.tab("4. Roteiro PDF"))
+        self._build_anamnese_tab(self.tabs.tab("5. Ficha anamnese"))
+        self.tabs.set("1. Logística")
 
     def _build_profile_tab(self, parent: ctk.CTkFrame) -> None:
         scroll = ctk.CTkScrollableFrame(parent)
@@ -521,8 +528,12 @@ class RoteiroDesktopApp(ctk.CTk):
                 pady=1,
             )
 
+    def _build_questions_tab(self, parent: ctk.CTkFrame) -> None:
+        scroll = ctk.CTkScrollableFrame(parent)
+        scroll.pack(fill="both", expand=True)
+
         ctk.CTkLabel(scroll, text="2. Eixo Plog (1 a 5)", font=ctk.CTkFont(weight="bold")).pack(
-            anchor="w", pady=(10, 2)
+            anchor="w", pady=(4, 2)
         )
         ctk.CTkLabel(
             scroll,
@@ -543,7 +554,7 @@ class RoteiroDesktopApp(ctk.CTk):
         ).pack(anchor="w", pady=(0, 4))
         self._score_block(scroll, COHEN_QUESTIONS, self.cohen_combos)
 
-        ctk.CTkButton(scroll, text="Gravar na planilha", command=self._save_profile).pack(
+        ctk.CTkButton(scroll, text="Salvar", command=self._save_profile).pack(
             anchor="w", pady=16
         )
 
@@ -599,7 +610,7 @@ class RoteiroDesktopApp(ctk.CTk):
         ctk.CTkButton(top, text="Importar inventário (.xlsx)", command=self._import_inventory).pack(
             side="left"
         )
-        ctk.CTkButton(top, text="Salvar modelo de inventário", command=self._save_inventory_template).pack(
+        ctk.CTkButton(top, text="Exportar inventário (.xlsx)", command=self._save_inventory_template).pack(
             side="left", padx=8
         )
         ctk.CTkButton(
@@ -847,12 +858,12 @@ class RoteiroDesktopApp(ctk.CTk):
         save_profile(self.workbook_path, profile)
         remember_workbook(self.workbook_path)
         self._refresh_scores_panel()
-        messagebox.showinfo("Salvo", "Perfil gravado na planilha.")
+        messagebox.showinfo("Salvo", "Informações salvas na planilha.")
 
     def _save_inventory_template(self) -> None:
         source = resolve_inventory_template() or create_inventory_template(inventory_template_path(ROOT))
         dest = filedialog.asksaveasfilename(
-            title="Salvar modelo de inventário",
+            title="Exportar inventário",
             defaultextension=".xlsx",
             initialfile="Modelo_Inventario_Turistico.xlsx",
             filetypes=[("Excel", "*.xlsx")],
@@ -860,7 +871,7 @@ class RoteiroDesktopApp(ctk.CTk):
         if not dest:
             return
         shutil.copy2(source, dest)
-        messagebox.showinfo("Modelo", f"Modelo salvo em:\n{dest}")
+        messagebox.showinfo("Inventário", f"Inventário exportado em:\n{dest}")
 
     def _import_inventory(self) -> None:
         path = filedialog.askopenfilename(
@@ -1134,7 +1145,7 @@ class RoteiroDesktopApp(ctk.CTk):
 
     def _open_pdf(self) -> None:
         if not self.last_pdf or not self.last_pdf.exists():
-            messagebox.showwarning("PDF", "Gere o PDF primeiro na aba 3.")
+            messagebox.showwarning("PDF", "Gere o PDF primeiro na aba 4.")
             return
         os.startfile(self.last_pdf)
 
@@ -1157,7 +1168,7 @@ class RoteiroDesktopApp(ctk.CTk):
 
     def _open_anamnese_pdf(self) -> None:
         if not self.last_anamnese_pdf or not self.last_anamnese_pdf.exists():
-            messagebox.showwarning("PDF", "Gere o PDF primeiro na aba 4.")
+            messagebox.showwarning("PDF", "Gere o PDF primeiro na aba 5.")
             return
         os.startfile(self.last_anamnese_pdf)
 
@@ -1170,7 +1181,7 @@ class RoteiroDesktopApp(ctk.CTk):
             self.workbook_path = initialize_session_workbook(
                 OUT / f"Projeto_Integrador_{stamp}.xlsx", TEMPLATE
             )
-            self.path_label.configure(text=self.workbook_path.name)
+            self.path_label.configure(text=SESSION_CAPTION)
         else:
             clear_profile_only(self.workbook_path)
         remember_workbook(self.workbook_path)
@@ -1183,7 +1194,7 @@ class RoteiroDesktopApp(ctk.CTk):
         self.pdf_status.configure(text="")
         self._apply_empty_form()
         self._refresh_inventory_table()
-        self.tabs.set("1. Perfil")
+        self.tabs.set("1. Logística")
 
     def _clear_all(self) -> None:
         if not messagebox.askyesno(
